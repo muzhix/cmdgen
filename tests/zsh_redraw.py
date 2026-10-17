@@ -30,6 +30,22 @@ def final_line(raw):
     return text[index:end]
 
 
+def read_until(fd, seconds, needle):
+    data = b""
+    end = time.time() + seconds
+    while time.time() < end:
+        ready, _, _ = select.select([fd], [], [], 0.05)
+        if fd not in ready:
+            continue
+        chunk = os.read(fd, 8192)
+        if not chunk:
+            break
+        data += chunk
+        if needle in data:
+            break
+    return data
+
+
 def main():
     widget = os.environ["CMDGEN_WIDGET"]
     bindir = os.environ["CMDGEN_BIN"]
@@ -49,6 +65,8 @@ def main():
         os.execvp("zsh", ["zsh", "-f", "-i"])
 
     os.close(slave)
+    before = b""
+    after = b""
     try:
         read_for(master, 0.4)
         os.write(master, b"PS1='hanbd@mbp cmdgen %% '\r")
@@ -56,18 +74,32 @@ def main():
         os.write(master, f"source {widget}\r".encode())
         read_for(master, 0.3)
         os.write(master, "列出所有docker容器".encode())
-        read_for(master, 0.2)
+        typed = read_for(master, 0.3)
         os.write(master, b"\x07")
-        raw = read_for(master, 1.2)
+        ghost = read_until(master, 2.0, "docker ps -a".encode())
+        before = typed + ghost
+        # Let the widget leave its cancel read before Tab accepts the ghost.
+        time.sleep(0.3)
+        os.write(master, b"\t")
+        after = read_for(master, 1.2)
         os.write(master, b"\x04")
         read_for(master, 0.2)
     finally:
         os.close(master)
         os.waitpid(pid, 0)
 
-    line = final_line(raw)
+    before_text = before.decode("utf-8", "replace")
+    print("BEFORE_INPUT=" + str("列出所有docker容器" in before_text))
+    print("BEFORE_GHOST=" + str("docker ps -a" in before_text))
+    print("BEFORE_SMASHED=" + str("列出所有docker容器docker ps -a" in before_text))
+    line = final_line(after)
     if not line:
-        raise SystemExit("no redraw: " + raw.decode("utf-8", "replace"))
+        raise SystemExit(
+            "no redraw: before="
+            + before_text
+            + " after="
+            + after.decode("utf-8", "replace")
+        )
     print("LINE=" + line)
 
 

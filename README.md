@@ -147,19 +147,19 @@ OpenAI 预设只是一个可改的起点（`https://api.openai.com/v1`，模型 
 默认快捷键是 `Ctrl+G`，可在配置里用 `shell.keybinding = "ctrl-x"` 修改，然后重新安装。
 
 ```bash
-cmdgen integration install zsh
+cmdgen shell install zsh
 source ~/.zshrc
 
-cmdgen integration install bash
+cmdgen shell install bash
 source ~/.bashrc
 ```
 
 重复安装不会追加第二段托管代码。卸载只删除 cmdgen 的标记区块和它自己的脚本：
 
 ```bash
-cmdgen integration uninstall zsh
-cmdgen integration uninstall bash
-cmdgen integration uninstall
+cmdgen shell uninstall zsh
+cmdgen shell uninstall bash
+cmdgen shell uninstall
 ```
 
 标记形如：
@@ -173,9 +173,13 @@ source "$HOME/.config/cmdgen/integration.zsh"
 集成行为：
 
 - 输入为空或只有空白时不发请求。
-- 成功且结果非空时替换当前输入行，光标移到末尾。
+- 生成期间在输入行末尾转圈。此时再按任意键会取消请求，并保留原始输入；这个按键不会插入到输入行。
+- Zsh 在结果是单行命令时不改已输入的文字，把建议显示成 ghost text。`Tab` 或右方向键接受，光标移到末尾。继续输入并偏离建议时 ghost 消失。建议还在时再按一次快捷键会重新生成。Enter 执行的是已经打出来的文字，不是 ghost。`rm`、`kill` 这类破坏性命令会标成红色并带 `⚠`，接受前不会进入输入行。不完整、会让 Shell 继续等待输入的建议会被丢弃。多行结果直接写入输入行。
+- Bash 在成功且结果非空时替换当前输入行，光标移到末尾。没有 ghost text。
 - 失败时保留原始输入。
 - 不会 `eval`，也不会自动按 Enter。
+
+要把单词 `shell` 当作描述，请写成 `cmdgen -- shell`。颜色可以用 `CMDGEN_HIGHLIGHT` 和 `CMDGEN_HIGHLIGHT_DESTRUCTIVE` 覆盖，格式与 Zsh 的 `region_highlight` 相同。
 
 Bash 集成使用 `bind -x`，需要 Bash 4 或更高版本。macOS 自带的 Bash 3.2 不能绑定快捷键；可以用 Homebrew 安装新版 Bash。Zsh 使用 ZLE，不依赖特定终端模拟器。
 

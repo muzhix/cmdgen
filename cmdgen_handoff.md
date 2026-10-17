@@ -226,11 +226,11 @@ find . -type f -name '*.md'
   `cmdgen config delete-key`                   删除当前 Provider
                                               的已保存凭据，执行前确认
 
-  `cmdgen integration install zsh`             安装 Zsh 集成
+  `cmdgen shell install zsh`                  安装 Zsh 集成
 
-  `cmdgen integration install bash`            安装 Bash 集成
+  `cmdgen shell install bash`                  安装 Bash 集成
 
-  `cmdgen integration uninstall [zsh\|bash]`   删除由 cmdgen 管理的集成代码
+  `cmdgen shell uninstall [zsh\|bash]`         删除由 cmdgen 管理的集成代码
 
   `cmdgen doctor`                              检查配置、Key 来源、网络和集成状态
 
@@ -476,11 +476,9 @@ CLI 命令可从 POSIX sh、Bash、Zsh 等 Shell 调用；首期快捷键输入�
 
 -   快捷键默认 `Ctrl+G`，必须允许修改。
 -   当前输入为空或只有空白时，不发起请求。
--   请求期间可以显示轻量状态，但不能污染生成结果。
--   仅在命令生成成功且非空时替换输入缓冲区。
+-   请求在后台进行。输入行末尾显示转圈，不能把状态写进生成结果。任意键取消请求并保留原始输入，该按键不插入。
 -   请求失败时保留原始输入。
--   替换后光标移动到命令末尾。
--   用户必须自行按 Enter 执行。
+-   用户必须自行按 Enter 执行。Enter 不会把尚未接受的 ghost text 当作命令。
 -   不允许 Integration 自动执行、自动接受或通过 `eval` 运行模型输出。
 
 ### 11.2 Zsh
@@ -491,10 +489,14 @@ CLI 命令可从 POSIX sh、Bash、Zsh 等 Shell 调用；首期快捷键输入�
 -   使用 `command cmdgen -- "$prompt"` 调用 CLI。
 -   调用时设置 `CMDGEN_SHELL=zsh`。
 -   捕获 stdout 作为候选命令，捕获退出码。
--   成功且输出非空时更新 `BUFFER`，设置 `CURSOR=${#BUFFER}`。
--   失败时保持原 `BUFFER` 不变，并通过 stderr 显示简短错误。
+-   单行成功结果保持原 `BUFFER`，用 `POSTDISPLAY` 显示 ghost text。建议不是当前输入的延伸时显示 ` ⇥ 命令`。`Tab` 和右方向键只在建议显示期间改绑为接受，接受后写回 `BUFFER` 并把光标移到末尾，然后恢复原来的绑定。
+-   输入仍是建议前缀时缩短 ghost；一旦偏离就清掉 ghost 并恢复按键。建议显示期间再按快捷键会重新请求。
+-   多行结果不用 ghost，直接更新 `BUFFER`，设置 `CURSOR=${#BUFFER}`。
+-   不完整建议（结尾 `&&`/`||`、未结束的续行、注释、heredoc，或 `zsh -n` 无法解析）丢弃，并保留原输入。
+-   `rm`、`kill`、`sed -i` 等破坏性命令只改变 ghost 颜色并加上 `⚠`，不阻止接受。
+-   失败时保持原 `BUFFER` 不变，并用 `zle -M` 显示简短错误。
 -   正确处理 ZLE redraw 和终端状态，避免状态提示残留。
--   使用 `zle -N` 注册 Widget，并使用 `bindkey` 绑定快捷键。
+-   使用 `zle -N` 注册 Widget，并使用 `bindkey` 绑定快捷键。休眠时不要长期占用 Tab 或右方向键。
 
 ### 11.3 Bash
 
@@ -504,8 +506,8 @@ CLI 命令可从 POSIX sh、Bash、Zsh 等 Shell 调用；首期快捷键输入�
 -   使用 `command cmdgen -- "$prompt"` 调用 CLI，并设置
     `CMDGEN_SHELL=bash`。
 -   成功时写回 `READLINE_LINE`，设置
-    `READLINE_POINT=${#READLINE_LINE}`。
--   失败时保留原输入行。
+    `READLINE_POINT=${#READLINE_LINE}`。Bash 不显示 ghost text。
+-   失败或按键取消时保留原输入行。
 -   使用 `bind -x` 绑定快捷键。
 -   处理 stderr 输出与 Readline 重绘，避免提示文本破坏终端显示。
 
@@ -721,7 +723,7 @@ README 应提供从零开始的安装、API Key 设置、命令生成、Shell
 
 -   ZLE Widget。
 -   可配置快捷键，默认 `Ctrl+G`。
--   成功替换输入行，失败保留原输入。
+-   单行成功结果显示为 ghost text，接受后才写入输入行；失败保留原输入。
 -   安装 / 卸载 / 幂等管理。
 
 **验收：** 在 macOS 的任意终端模拟器中使用 Zsh，可从自然语言输入行触发命令生成；用户必须手工确认执行。

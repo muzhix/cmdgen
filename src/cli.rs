@@ -32,7 +32,7 @@ config set-key 不接受命令行参数，以免 API Key 写入 Shell 历史。\
 cmdgen 只把命令打印到标准输出，或在 Shell 集成中填回输入行。它不会执行生成的命令。
 
 选项需要写在描述之前。描述以 - 开头时，请使用: cmdgen -- \"-n 列出文件\"
-要让 config、doctor 这类词作为描述，请使用: cmdgen -- config",
+要让 config、doctor、shell 这类词作为描述，请使用: cmdgen -- shell",
     subcommand_negates_reqs = true,
     args_conflicts_with_subcommands = true
 )]
@@ -83,7 +83,7 @@ enum Command {
         action: ConfigCommand,
     },
     /// 安装或卸载 Shell 输入行集成
-    Integration {
+    Shell {
         #[command(subcommand)]
         action: IntegrationCommand,
     },
@@ -173,7 +173,7 @@ fn execute(cli: Cli) -> Result<i32, Error> {
     };
     match command {
         Some(Command::Config { action }) => config_command(&overrides, action),
-        Some(Command::Integration { action }) => integration_command(&overrides, action),
+        Some(Command::Shell { action }) => integration_command(&overrides, action),
         Some(Command::Doctor) => doctor_command(&overrides),
         None => generate(&prompt, &overrides, verbose),
     }
