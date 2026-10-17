@@ -1,6 +1,8 @@
 use std::ffi::OsString;
 use std::io::{self, IsTerminal, Write};
-use std::time::Instant;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -234,11 +236,13 @@ fn generate(prompt: &[String], overrides: &Overrides, verbose: bool) -> Result<i
         disable_thinking: config.provider_name == "deepseek",
     });
     let started = Instant::now();
-    let result = complete(&CompletionRequest {
-        endpoint: &endpoint,
-        api_key: &key.secret,
-        body: &body,
-        timeout_secs: config.timeout_secs,
+    let result = with_loading("正在生成", || {
+        complete(&CompletionRequest {
+            endpoint: &endpoint,
+            api_key: &key.secret,
+            body: &body,
+            timeout_secs: config.timeout_secs,
+        })
     });
     if verbose {
         eprintln!("耗时: {} ms", started.elapsed().as_millis());
@@ -469,6 +473,37 @@ fn include_provider_env(env: &mut EnvMap, config: &crate::config::EffectiveConfi
     if let Some(var) = &config.api_key_env {
         env.include_process_var(var);
     }
+}
+
+/// 交互式终端上的短暂状态。请求结束或失败后擦掉。
+/// 标准输出始终只有命令；标准错误被管道或文件接走时不写转圈。
+fn with_loading<T>(label: &str, work: impl FnOnce() -> T) -> T {
+    if !io::stderr().is_terminal() {
+        return work();
+    }
+
+    let (tx, rx) = mpsc::channel();
+    let label = label.to_string();
+    let spinner = thread::spawn(move || {
+        const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let mut err = io::stderr();
+        let mut frame = 0usize;
+        loop {
+            let _ = write!(err, "\r\x1b[2K{} {label}", FRAMES[frame % FRAMES.len()]);
+            let _ = err.flush();
+            frame += 1;
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        }
+        let _ = write!(err, "\r\x1b[2K");
+        let _ = err.flush();
+    });
+    let result = work();
+    drop(tx);
+    let _ = spinner.join();
+    result
 }
 
 fn display_shell(shell: IntegrationShell) -> &'static str {

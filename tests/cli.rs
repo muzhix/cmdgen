@@ -105,6 +105,7 @@ async fn api_failure_keeps_stdout_empty_and_redacts_secrets() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("401"));
     assert!(stderr.contains("[REDACTED]"));
+    assert!(!stderr.contains("正在生成"));
     common::assert_no_secret(&stderr, SECRET);
 }
 
@@ -164,6 +165,107 @@ async fn timeout_reports_on_stderr() {
     provider_env(&mut cmd, &server.uri());
     cmd.args(["--timeout", "1", "列出文件"]);
     cmd.assert().failure().stdout("").stderr(contains("超时"));
+}
+
+#[tokio::test]
+async fn tty_shows_loading_then_only_the_command() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_millis(500))
+                .set_body_json(json!({"choices":[{"message":{"content":"ls"}}]})),
+        )
+        .mount(&server)
+        .await;
+
+    let sandbox = common::Sandbox::new();
+    let output = tty_cmdgen(&sandbox, &server.uri(), &["列出文件"]);
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let visible = terminal_text(&raw);
+    assert!(
+        output.status.success(),
+        "status={:?}\nraw={raw:?}\nvisible={visible:?}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(raw.contains('⠋') && raw.contains("正在生成"), "raw={raw:?}");
+    assert_eq!(visible, "ls");
+}
+
+#[tokio::test]
+async fn tty_loading_clears_before_the_error() {
+    let server = MockServer::start().await;
+    mount_content(&server, 403, json!({"error":{"message":"denied"}})).await;
+
+    let sandbox = common::Sandbox::new();
+    let output = tty_cmdgen(&sandbox, &server.uri(), &["列出文件"]);
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let visible = terminal_text(&raw);
+    assert!(
+        !output.status.success(),
+        "status={:?}\nraw={raw:?}\nvisible={visible:?}",
+        output.status
+    );
+    assert!(raw.contains("正在生成"), "raw={raw:?}");
+    assert!(visible.contains("403"), "visible={visible:?}");
+    assert!(!visible.contains("正在生成"), "visible={visible:?}");
+}
+
+fn tty_cmdgen(sandbox: &common::Sandbox, base_url: &str, args: &[&str]) -> std::process::Output {
+    let mut cmd = assert_cmd::Command::new("python3");
+    cmd.arg("-c")
+        .arg(include_str!("tty_loading.py"))
+        .arg(env!("CARGO_BIN_EXE_cmdgen"))
+        .args(args)
+        .env("HOME", &sandbox.home)
+        .env("XDG_CONFIG_HOME", &sandbox.config_home)
+        .env("CMDGEN_API_KEY", SECRET)
+        .env("CMDGEN_BASE_URL", base_url)
+        .env("CMDGEN_PROVIDER", "deepseek")
+        .env("CMDGEN_SHELL", "zsh")
+        .env_remove("CMDGEN_DEBUG")
+        .timeout(std::time::Duration::from_secs(15));
+    cmd.output().expect("python3 pty")
+}
+
+fn terminal_text(raw: &str) -> String {
+    let mut line = String::new();
+    let mut lines = Vec::new();
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' if chars.peek() == Some(&'\n') => {
+                chars.next();
+                lines.push(std::mem::take(&mut line));
+            }
+            '\r' => line.clear(),
+            '\n' => lines.push(std::mem::take(&mut line)),
+            '\u{1b}' => {
+                if chars.peek() == Some(&'[') {
+                    chars.next();
+                    for code in chars.by_ref() {
+                        if code.is_ascii_alphabetic() {
+                            if code == 'K' {
+                                line.clear();
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            other => line.push(other),
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+        .into_iter()
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
