@@ -1,6 +1,8 @@
 # cmdgen
 
-cmdgen — AI-powered shell command generation for your terminal.
+[![CI](https://github.com/muzhix/cmdgen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/muzhix/cmdgen/actions/workflows/ci.yml)[![Release](https://github.com/muzhix/cmdgen/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/muzhix/cmdgen/actions/workflows/release.yml)
+
+> cmdgen — AI-powered shell command generation for your terminal.
 
 `cmdgen` 把自然语言转换成当前操作系统和 Shell 可用的命令。它是一个独立、轻量、BYOK 的命令行工具：默认调用 DeepSeek 官方 API，也可以改成任何 OpenAI-compatible Chat Completions 接口。
 
