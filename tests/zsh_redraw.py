@@ -62,7 +62,7 @@ def main():
         env["TERM"] = "xterm-256color"
         env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
         env["PS1"] = "hanbd@mbp cmdgen %% "
-        os.execvp("zsh", ["zsh", "-f", "-i"])
+        os.execvpe("zsh", ["zsh", "-f", "-i"], env)
 
     os.close(slave)
     before = b""
