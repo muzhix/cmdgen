@@ -65,7 +65,11 @@ pub fn diagnose(
     store: &dyn SecretStore,
     probe_network: bool,
 ) -> Result<Report, Error> {
-    let config = load_effective(env, overrides)?;
+    let mut env = env.clone();
+    let config = load_effective(&env, overrides)?;
+    if let Some(var) = config.api_key_env.clone() {
+        env.include_process_var(&var);
+    }
     let shell = resolve_shell(
         overrides.shell.as_deref(),
         &config.shell_default,
@@ -104,8 +108,11 @@ pub fn diagnose(
         level: Level::Pass,
         name: "Provider".into(),
         detail: format!(
-            "name={} model={}\nbase_url={}",
-            config.provider_name, config.model, config.base_url
+            "name={} model={}\nbase_url={}\n已配置: {}",
+            config.provider_name,
+            config.model,
+            config.base_url,
+            configured_names(&config)
         ),
     });
 
@@ -115,8 +122,14 @@ pub fn diagnose(
         detail: format!("os={} shell={shell}", os_label()),
     });
 
-    let credentials = CredentialFile::from_env(env)?;
-    match resolve_api_key(&config.provider_name, env, store, &credentials) {
+    let credentials = CredentialFile::from_env(&env)?;
+    match resolve_api_key(
+        &config.provider_name,
+        config.api_key_env.as_deref(),
+        &env,
+        store,
+        &credentials,
+    ) {
         Ok(key) => checks.push(Check {
             level: Level::Pass,
             name: "API Key".into(),
@@ -150,8 +163,8 @@ pub fn diagnose(
         probe_network,
     ));
 
-    let home = home_dir(env)?;
-    let dir = config_dir(env)?;
+    let home = home_dir(&env)?;
+    let dir = config_dir(&env)?;
     let mut integration_lines = Vec::new();
     let mut broken = false;
     for shell in [IntegrationShell::Zsh, IntegrationShell::Bash] {
@@ -167,6 +180,19 @@ pub fn diagnose(
     });
 
     Ok(Report { checks })
+}
+
+fn configured_names(config: &crate::config::EffectiveConfig) -> String {
+    if config.configured_providers.is_empty() {
+        "（无）".to_string()
+    } else {
+        config
+            .configured_providers
+            .iter()
+            .map(|provider| provider.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 fn network_check(base_url: &str, timeout_secs: u64, probe_network: bool) -> Check {

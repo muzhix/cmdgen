@@ -15,7 +15,9 @@ pub enum Error {
     #[error("系统凭据存储不可用: {reason}\n可以改用环境变量 CMDGEN_API_KEY，无需凭据存储。")]
     CredentialStoreUnavailable { reason: String },
 
-    #[error("不支持的 provider: {name}。请设置 base_url 和 model，或改用预设 deepseek / openai。")]
+    #[error(
+        "不支持的 provider: {name}。请设置 base_url 和 model，或改用预设 deepseek / bailian。"
+    )]
     UnsupportedProvider { name: String },
 
     #[error("base_url 无效: {reason}")]
@@ -78,14 +80,26 @@ pub fn redact(text: &str, secret: &str) -> String {
     text.replace(secret, "[REDACTED]")
 }
 
-pub(crate) fn missing_api_key(provider: &str, store_problem: Option<String>) -> Error {
-    let provider_var = crate::config::provider_env_var(provider);
+pub(crate) fn missing_api_key(
+    provider: &str,
+    api_key_env: Option<&str>,
+    store_problem: Option<String>,
+) -> Error {
+    let steps = match api_key_env.filter(|name| !name.trim().is_empty()) {
+        Some(var) => format!(
+            "1. 环境变量 CMDGEN_API_KEY\n  \
+             2. 环境变量 {var}\n  \
+             3. 运行 `cmdgen config set-key`。优先保存到系统凭据存储（服务名 cmdgen，账号 {provider}）；凭据存储不可用时写入本地凭据文件 credentials.toml"
+        ),
+        None => format!(
+            "1. 环境变量 CMDGEN_API_KEY\n  \
+             2. 运行 `cmdgen config set-key`。优先保存到系统凭据存储（服务名 cmdgen，账号 {provider}）；凭据存储不可用时写入本地凭据文件 credentials.toml"
+        ),
+    };
     let mut message = format!(
         "未找到 API Key。请任选一种方式配置（不会写入 config.toml）：\n\
          \n  \
-         1. 环境变量 CMDGEN_API_KEY\n  \
-         2. 环境变量 {provider_var}\n  \
-         3. 运行 `cmdgen config set-key`。优先保存到系统凭据存储（服务名 cmdgen，账号 {provider}）；凭据存储不可用时写入本地凭据文件 credentials.toml\n\
+         {steps}\n\
          \n当前 provider: {provider}"
     );
     if let Some(reason) = store_problem {

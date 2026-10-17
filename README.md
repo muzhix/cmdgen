@@ -73,12 +73,19 @@ cmdgen -- "-n 列出当前目录"
 
 ```bash
 cmdgen config show
+cmdgen config providers
+cmdgen config use bailian
+cmdgen config set --provider bailian --base-url https://example.com/compatible-mode/v1
 cmdgen doctor
 cmdgen --version
 cmdgen --help
 ```
 
-单次覆盖参数：`--provider`、`--model`、`--base-url`、`--shell`、`--timeout`、`--verbose`。`--verbose` 只向 stderr 输出模型、接口和耗时，不输出 API Key，也不输出完整 prompt。
+`config providers` 列出已保存的 provider，并标出当前项。`config use <name>` 把当前项写入配置文件。单次切换不改文件：`cmdgen --provider bailian "列出大文件"`。给某一家保存 Key：`cmdgen config set-key --provider bailian`。`--provider` 等选项要写在 `config` 之后；写在前面时，`config` 会被当成描述。
+
+`config set` 把 `--model`、`--base-url` 写入 `[providers.<name>]`。可以只写其中一个。`--provider` 省略时修改当前 `active`，不会切换当前项。`CMDGEN_MODEL` 和 `CMDGEN_BASE_URL` 不会被写入。
+
+单次覆盖参数：`--provider`、`--model`、`--base-url`、`--shell`、`--timeout`、`--verbose`。除了 `config set` 会保存 `--model` 和 `--base-url`，这些参数都只影响这一次。`--verbose` 只向 stderr 输出模型、接口和耗时，不输出 API Key，也不输出完整 prompt。
 
 ## 配置优先级
 
@@ -108,20 +115,37 @@ cmdgen --help
 
 Shell 识别顺序：`--shell` > `CMDGEN_SHELL` > 配置里的 `shell.default` > `$SHELL` 的文件名 > `sh`。`auto` 表示继续向下识别。检测不会启动新的 Shell 进程。
 
+选中哪一家 provider 的顺序：
+
+1. `--provider`
+2. `CMDGEN_PROVIDER`
+3. 配置里的 `active`；旧的单个 `[provider]` 则使用它的 `name`
+4. 内置 `deepseek`
+
+选中后使用该档案自己的 `base_url` 和 `model`。`--base-url`、`CMDGEN_BASE_URL`、`--model`、`CMDGEN_MODEL` 仍可覆盖这一次的单项。内置预设是 `deepseek` 和 `bailian`，可以不写地址和模型。其他名称必须在 `[providers.<name>]` 里写上这两项，或在命令行同时给出。没有配置文件时默认使用 `deepseek`。
+
 API Key 使用单独的顺序：
 
 1. `CMDGEN_API_KEY`
-2. DeepSeek 使用 `DEEPSEEK_API_KEY`；其他 provider 使用 `OPENAI_API_KEY`
+2. 该档案的 `api_key_env`。没写时，`deepseek` 使用 `DEEPSEEK_API_KEY`，`bailian` 使用 `DASHSCOPE_API_KEY`。新的 `[providers.<name>]` 不会再落入 `OPENAI_API_KEY`
 3. 系统凭据存储中、账号等于 provider 名称的凭据
 4. 本地凭据文件 `credentials.toml` 中、同一 provider 的凭据
+
+旧的单个 `[provider]` 且名称不是 `deepseek` 时，第 2 步仍是 `OPENAI_API_KEY`。
 
 默认配置：
 
 ```toml
-[provider]
-name = "deepseek"
+active = "deepseek"
+
+[providers.deepseek]
 base_url = "https://api.deepseek.com"
 model = "deepseek-flash"
+
+[providers.bailian]
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+model = "qwen3.8-flash"
+api_key_env = "DASHSCOPE_API_KEY"
 
 [generation]
 temperature = 0.0
@@ -134,13 +158,22 @@ keybinding = "ctrl-g"
 include_cwd = false
 ```
 
+默认启用 `deepseek`。切到百炼：
+
+```bash
+cmdgen config set-key --provider bailian
+cmdgen config use bailian
+```
+
+`api_key_env` 只写环境变量名，不写密钥。百炼预设使用华北 2（北京）的共用域名，不包含业务空间 ID。若要改用业务空间专属域名，运行 `cmdgen config set --provider bailian --base-url <url>`。只想改这一次时，仍用 `--base-url`。`qwen3.8-flash` 于 2026-10-17 对照百炼文本生成文档核对。旧的 `[provider]` 表仍然可以读取；它和 `[providers]` 不能同时出现。其他 OpenAI 兼容服务可以写成 `[providers.<name>]`，或用 `cmdgen config set --provider <name> --base-url <url> --model <model>` 创建。
+
 `deepseek-flash` 于 2026-10-17 对照 DeepSeek 官方文档核对。它不是永久有效的常量；如果官方更换模型名，请修改配置和这里的说明。DeepSeek 默认开启思考模式，cmdgen 在 provider 为 `deepseek` 时发送 `thinking.type=disabled`，以便直接返回命令。
 
 `base_url` 是 API 前缀。客户端只拼接一次 `/chat/completions`，不会重复追加 `/v1`。非本机地址必须使用 HTTPS，且不能关闭证书校验。`127.0.0.1` 和 `localhost` 允许 HTTP，便于连接本机兼容服务。
 
 `shell.include_cwd` 默认为 `false`。只有设为 `true` 时，请求才会附带当前工作目录路径，不会上传目录内容、历史或环境变量。
 
-OpenAI 预设只是一个可改的起点（`https://api.openai.com/v1`，模型 `gpt-4o-mini`）。自定义服务只要写上 `name`、`base_url` 和 `model` 即可，不需要插件系统。
+内置预设只有 `deepseek` 和 `bailian`。自定义服务写成 `[providers.<name>]` 即可，不需要插件系统。
 
 ## Shell 集成
 

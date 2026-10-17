@@ -33,6 +33,7 @@ impl Sandbox {
             "CMDGEN_API_KEY",
             "DEEPSEEK_API_KEY",
             "OPENAI_API_KEY",
+            "DASHSCOPE_API_KEY",
             "CMDGEN_BASE_URL",
             "CMDGEN_MODEL",
             "CMDGEN_PROVIDER",

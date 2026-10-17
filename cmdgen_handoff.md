@@ -220,6 +220,9 @@ find . -type f -name '*.md'
 
   `cmdgen config show`                         显示有效配置，Key 必须脱敏
 
+  `cmdgen config set`                          把 `--model` 或 `--base-url`
+                                              写入 provider 档案
+
   `cmdgen config set-key`                      隐藏输入 API
                                               Key，并保存到系统凭据存储
 
@@ -240,7 +243,9 @@ find . -type f -name '*.md'
   -------------------------------------------------------------------------------
 
 可以补充 `--provider`、`--model`、`--base-url`、`--shell`、`--timeout`
-等单次覆盖参数，但不要为了这些参数增加复杂的 Provider 插件系统。
+等单次覆盖参数。`cmdgen config set` 是例外：它把显式给出的 `--model` 和
+`--base-url` 写入配置文件，省略 `--provider` 时修改当前 `active`，不读取
+`CMDGEN_MODEL` 或 `CMDGEN_BASE_URL`。多家服务是配置文件里的具名档案，不是 Provider 插件系统。
 
 CLI 必须支持通过 `--` 传入以 `-` 开头的自然语言描述。Shell 集成应使用
 `command cmdgen -- "$prompt"`，避免调用同名 Shell 函数并规避参数歧义。
@@ -262,10 +267,16 @@ prompt 恰好为 `config`、`doctor` 等字符串时的行为。
 示例：
 
 ``` toml
-[provider]
-name = "deepseek"
+active = "deepseek"
+
+[providers.deepseek]
 base_url = "https://api.deepseek.com"
 model = "deepseek-flash"
+
+[providers.bailian]
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+model = "qwen3.8-flash"
+api_key_env = "DASHSCOPE_API_KEY"
 
 [generation]
 temperature = 0.0
@@ -278,9 +289,18 @@ keybinding = "ctrl-g"
 include_cwd = false
 ```
 
-**模型 ID 必须在实现时核对 DeepSeek 官方最新文档。** 上面的
-`deepseek-flash`
-是可编辑的示例默认值，不得假设它永远有效；如果已弃用，应更新默认值和
+`active` 是当前 provider。`cmdgen config use <name>` 只改这一项；`--provider`
+和 `CMDGEN_PROVIDER` 只影响这一次，并带上该档案自己的 `base_url` 和
+`model`。`cmdgen config set [--provider <name>] [--model <id>] [--base-url <url>]`
+把给出的地址和模型写入 `[providers.<name>]`，不切换 `active`。已有档案可以只改其中一项。预设 `deepseek` / `bailian` 尚不存在时也可以只写一项，缺的一项继续用内置值。其他新名称必须同时给出这两项。内置预设是 `deepseek` 和 `bailian`，默认 `active` 为 `deepseek`。这两个名称可以省略地址和模型。其他名称必须写上这两项。可选的
+`api_key_env` 只保存环境变量名，不保存密钥。
+
+旧的单个 `[provider]` 表仍然有效。同一文件不能同时使用 `[provider]` 和
+`[providers]`。这不是插件系统：所有档案都走同一个 OpenAI-compatible Chat
+Completions 客户端。
+
+**模型 ID 必须在实现时核对官方文档。** 上面的 `deepseek-flash` 和
+`qwen3.8-flash` 是 2026-10-17 核对过的默认值，不得假设它们永远有效；如果已弃用，应更新默认值和
 README。Provider、Base URL、模型 ID 必须允许用户自行配置。
 
 配置文件不保存 API Key。配置目录权限应尽可能设为 `0700`，配置文件权限为
@@ -291,10 +311,13 @@ README。Provider、Base URL、模型 ID 必须允许用户自行配置。
 推荐顺序：
 
 1.  `CMDGEN_API_KEY`（通用显式覆盖）。
-2.  对应 Provider 的环境变量，例如 DeepSeek 使用
-    `DEEPSEEK_API_KEY`，OpenAI-compatible 服务可使用 `OPENAI_API_KEY`。
-3.  系统凭据存储中按 Provider 命名空间保存的 Key。
-4.  若均不存在，输出清晰的设置指引并返回非零状态。
+2.  该档案的 `api_key_env`。未设置时，`deepseek` 使用
+    `DEEPSEEK_API_KEY`，`bailian` 使用 `DASHSCOPE_API_KEY`。新的
+    `[providers.<name>]` 不回退到 `OPENAI_API_KEY`。旧的单个
+    `[provider]` 且名称不是 `deepseek` 时，仍使用 `OPENAI_API_KEY`。
+3.  系统凭据存储中按 Provider 名称保存的 Key。
+4.  本地凭据文件 `credentials.toml` 中同一名称的 Key。
+5.  若均不存在，输出清晰的设置指引并返回非零状态。
 
 不要将 API Key 写入 `config.toml`。`cmdgen config set-key`
 使用隐藏输入读取 Key，保存到系统凭据存储。不得把 Key

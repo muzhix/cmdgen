@@ -219,7 +219,23 @@ fn config_init_is_private_and_idempotent() {
         & 0o777;
     assert_eq!(dir_mode, 0o700);
     let original = fs::read_to_string(&path).unwrap();
-    assert!(!original.to_ascii_lowercase().contains("api_key"));
+    assert!(original.lines().all(|line| {
+        let code = line
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let key = code
+            .split_once('=')
+            .map(|(key, _)| key.trim())
+            .unwrap_or("");
+        !matches!(key, "api_key" | "apikey" | "token" | "secret" | "password")
+    }));
+    assert!(original.contains("[providers.deepseek]"));
+    assert!(original.contains("[providers.bailian]"));
+    assert!(original.contains("active = \"deepseek\""));
+    assert!(original.contains("qwen3.8-flash"));
     sandbox
         .command()
         .args(["config", "init"])
@@ -302,4 +318,142 @@ async fn generated_command_is_never_executed() {
     cmd.arg("创建文件");
     cmd.assert().success().stdout(format!("{command}\n"));
     assert!(!marker_path.exists());
+}
+
+#[test]
+fn config_use_switches_the_saved_provider() {
+    let sandbox = common::Sandbox::new();
+    sandbox
+        .command()
+        .args(["config", "init"])
+        .assert()
+        .success();
+    let path = sandbox.config_dir().join("config.toml");
+
+    sandbox
+        .command()
+        .args(["config", "providers"])
+        .assert()
+        .success()
+        .stdout(contains("* deepseek"))
+        .stdout(contains("bailian"));
+
+    sandbox
+        .command()
+        .args(["config", "use", "bailian"])
+        .assert()
+        .success()
+        .stdout(contains("已切换到 provider: bailian"));
+    let updated = fs::read_to_string(&path).unwrap();
+    assert!(updated.contains("active = \"bailian\"") || updated.contains("active = 'bailian'"));
+    assert!(updated.contains("https://api.deepseek.com"));
+
+    sandbox
+        .command()
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(contains("provider.name: bailian"))
+        .stdout(contains("dashscope.aliyuncs.com"));
+}
+
+#[test]
+fn config_set_writes_the_provider_endpoint() {
+    let sandbox = common::Sandbox::new();
+    sandbox
+        .command()
+        .args(["config", "init"])
+        .assert()
+        .success();
+    let path = sandbox.config_dir().join("config.toml");
+    let original = fs::read_to_string(&path).unwrap();
+
+    sandbox
+        .command()
+        .args(["config", "set"])
+        .assert()
+        .failure()
+        .stderr(contains("--model"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+
+    sandbox
+        .command()
+        .args([
+            "config",
+            "show",
+            "--provider",
+            "bailian",
+            "--base-url",
+            "https://preview.example/v1",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("https://preview.example/v1"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+
+    sandbox
+        .command()
+        .env("CMDGEN_BASE_URL", "https://evil.example/v1")
+        .args([
+            "config",
+            "set",
+            "--provider",
+            "bailian",
+            "--base-url",
+            "https://llm.example.com/compatible-mode/v1",
+            "--model",
+            "qwen-plus",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("已更新 provider: bailian"))
+        .stdout(contains("https://llm.example.com/compatible-mode/v1"))
+        .stdout(contains("qwen-plus"));
+
+    let updated = fs::read_to_string(&path).unwrap();
+    assert!(updated.contains("active = \"deepseek\"") || updated.contains("active = 'deepseek'"));
+    assert!(updated.contains("https://api.deepseek.com"));
+    assert!(updated.contains("https://llm.example.com/compatible-mode/v1"));
+    assert!(updated.contains("qwen-plus"));
+    assert!(!updated.contains("evil.example"));
+    assert!(updated.contains("DASHSCOPE_API_KEY"));
+
+    sandbox
+        .command()
+        .args(["config", "show", "--provider", "bailian"])
+        .assert()
+        .success()
+        .stdout(contains("provider.name: bailian"))
+        .stdout(contains("https://llm.example.com/compatible-mode/v1"))
+        .stdout(contains("provider.model: qwen-plus"));
+}
+
+#[tokio::test]
+async fn named_provider_uses_its_endpoint_without_thinking() {
+    let server = MockServer::start().await;
+    mount_content(
+        &server,
+        200,
+        json!({"choices":[{"message":{"content":"ls -lh"}}]}),
+    )
+    .await;
+    let sandbox = common::Sandbox::new();
+    let path = sandbox.config_dir().join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        format!(
+            "active = \"deepseek\"\n\n[providers.deepseek]\nbase_url = \"https://api.deepseek.com\"\nmodel = \"deepseek-flash\"\n\n[providers.bailian]\nbase_url = \"{}\"\nmodel = \"qwen-plus\"\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    let mut cmd = sandbox.command();
+    cmd.env("CMDGEN_API_KEY", SECRET);
+    cmd.args(["--provider", "bailian", "列出大文件"]);
+    cmd.assert().success().stdout("ls -lh\n");
+    let body: serde_json::Value =
+        serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
+    assert_eq!(body["model"], "qwen-plus");
+    assert!(body.get("thinking").is_none());
 }

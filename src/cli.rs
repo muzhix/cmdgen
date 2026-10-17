@@ -5,9 +5,9 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::config::{
-    config_dir, delete_api_key, home_dir, init_config, key_status_from, load_effective,
-    resolve_api_key, save_api_key, CredentialFile, EnvMap, InitOutcome, KeyringStore, Overrides,
-    SavedKey,
+    activate_provider, config_dir, config_path, delete_api_key, home_dir, init_config,
+    key_status_from, load_effective, render_providers, resolve_api_key, save_api_key,
+    update_provider, CredentialFile, EnvMap, InitOutcome, KeyringStore, Overrides, SavedKey,
 };
 use crate::doctor;
 use crate::error::Error;
@@ -97,6 +97,15 @@ enum ConfigCommand {
     Init,
     /// 显示有效配置（API Key 脱敏）
     Show,
+    /// 列出已配置的 provider，并标出当前项
+    Providers,
+    /// 切换当前 provider，并写入配置文件的 active
+    Use {
+        /// 已配置的 provider 名称，或预设 deepseek / bailian
+        name: String,
+    },
+    /// 把 --model 或 --base-url 写入配置文件。省略 --provider 时修改当前 active
+    Set,
     /// 隐藏输入 API Key。优先保存到系统凭据存储；不可用时写入本地凭据文件
     SetKey,
     /// 删除当前 provider 在系统凭据存储和本地凭据文件中的 API Key
@@ -187,8 +196,9 @@ fn generate(prompt: &[String], overrides: &Overrides, verbose: bool) -> Result<i
         ));
     }
 
-    let env = EnvMap::from_process();
+    let mut env = EnvMap::from_process();
     let config = load_effective(&env, overrides)?;
+    include_provider_env(&mut env, &config);
     let shell = resolve_shell(
         overrides.shell.as_deref(),
         &config.shell_default,
@@ -198,6 +208,7 @@ fn generate(prompt: &[String], overrides: &Overrides, verbose: bool) -> Result<i
     let endpoint = completions_endpoint(&config.base_url)?;
     let key = resolve_api_key(
         &config.provider_name,
+        config.api_key_env.as_deref(),
         &env,
         &KeyringStore,
         &CredentialFile::from_env(&env)?,
@@ -256,7 +267,9 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
             Ok(0)
         }
         ConfigCommand::Show => {
+            let mut env = env;
             let config = load_effective(&env, overrides)?;
+            include_provider_env(&mut env, &config);
             let shell = resolve_shell(
                 overrides.shell.as_deref(),
                 &config.shell_default,
@@ -265,6 +278,7 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
             )?;
             let resolved = resolve_api_key(
                 &config.provider_name,
+                config.api_key_env.as_deref(),
                 &env,
                 &KeyringStore,
                 &CredentialFile::from_env(&env)?,
@@ -272,6 +286,52 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
             let status = key_status_from(resolved.as_ref());
             print!("{}", crate::config::render_show(&config, &shell, &status));
             Ok(0)
+        }
+        ConfigCommand::Providers => {
+            let config = load_effective(&env, overrides)?;
+            print!("{}", render_providers(&config));
+            Ok(0)
+        }
+        ConfigCommand::Use { name } => {
+            let path = config_path(&env)?;
+            match activate_provider(&path, &name) {
+                Ok(active) => {
+                    println!("已切换到 provider: {active}");
+                    println!("配置文件: {}", path.display());
+                    Ok(0)
+                }
+                Err(Error::ConfigNotFound { .. }) => Err(Error::Usage(
+                    "找不到配置文件。请先运行 `cmdgen config init`，或自行创建 [providers.<name>]。"
+                        .into(),
+                )),
+                Err(err) => Err(err),
+            }
+        }
+        ConfigCommand::Set => {
+            let path = config_path(&env)?;
+            match update_provider(
+                &path,
+                overrides.provider.as_deref(),
+                overrides.base_url.as_deref(),
+                overrides.model.as_deref(),
+            ) {
+                Ok(update) => {
+                    println!("已更新 provider: {}", update.name);
+                    if let Some(url) = &update.base_url {
+                        println!("base_url: {url}");
+                    }
+                    if let Some(model) = &update.model {
+                        println!("model: {model}");
+                    }
+                    println!("配置文件: {}", path.display());
+                    Ok(0)
+                }
+                Err(Error::ConfigNotFound { .. }) => Err(Error::Usage(
+                    "找不到配置文件。请先运行 `cmdgen config init`，或自行创建 [providers.<name>]。"
+                        .into(),
+                )),
+                Err(err) => Err(err),
+            }
         }
         ConfigCommand::SetKey => {
             let config = load_effective(&env, overrides)?;
@@ -403,6 +463,12 @@ fn doctor_command(overrides: &Overrides) -> Result<i32, Error> {
     let report = doctor::diagnose(&env, overrides, &KeyringStore, true)?;
     print!("{}", report.render());
     Ok(if report.has_failure() { 1 } else { 0 })
+}
+
+fn include_provider_env(env: &mut EnvMap, config: &crate::config::EffectiveConfig) {
+    if let Some(var) = &config.api_key_env {
+        env.include_process_var(var);
+    }
 }
 
 fn display_shell(shell: IntegrationShell) -> &'static str {

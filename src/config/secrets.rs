@@ -8,6 +8,7 @@ use crate::fsutil;
 
 pub const SERVICE_NAME: &str = "cmdgen";
 
+#[derive(Clone)]
 pub struct EnvMap {
     values: HashMap<String, String>,
 }
@@ -31,6 +32,16 @@ impl EnvMap {
             .filter(|value| !value.is_empty())
     }
 
+    /// 把进程环境里的某一个变量补进映射。已有同名项时不覆盖。
+    pub fn include_process_var(&mut self, key: &str) {
+        if self.values.contains_key(key) {
+            return;
+        }
+        if let Ok(value) = std::env::var(key) {
+            self.set(key, value);
+        }
+    }
+
     pub fn from_process() -> Self {
         const KEYS: &[&str] = &[
             "HOME",
@@ -39,6 +50,7 @@ impl EnvMap {
             "CMDGEN_API_KEY",
             "DEEPSEEK_API_KEY",
             "OPENAI_API_KEY",
+            "DASHSCOPE_API_KEY",
             "CMDGEN_BASE_URL",
             "CMDGEN_MODEL",
             "CMDGEN_PROVIDER",
@@ -185,6 +197,8 @@ impl SecretStore for MemoryStore {
 pub fn provider_env_var(provider: &str) -> &'static str {
     if provider.eq_ignore_ascii_case("deepseek") {
         "DEEPSEEK_API_KEY"
+    } else if provider.eq_ignore_ascii_case("bailian") {
+        "DASHSCOPE_API_KEY"
     } else {
         "OPENAI_API_KEY"
     }
@@ -342,9 +356,11 @@ pub fn delete_api_key(
     })
 }
 
-/// 凭据优先级：`CMDGEN_API_KEY` > provider 环境变量 > 系统凭据存储 > 本地凭据文件。
+/// 凭据优先级：`CMDGEN_API_KEY` > `api_key_env` > 系统凭据存储 > 本地凭据文件。
+/// `api_key_env` 为 `None` 时跳过 provider 环境变量，避免误用 `OPENAI_API_KEY`。
 pub fn resolve_api_key(
     provider: &str,
+    api_key_env: Option<&str>,
     env: &EnvMap,
     store: &dyn SecretStore,
     file: &CredentialFile,
@@ -356,12 +372,13 @@ pub fn resolve_api_key(
         });
     }
 
-    let provider_var = provider_env_var(provider);
-    if let Some(secret) = env.get(provider_var) {
-        return Ok(ResolvedKey {
-            secret: secret.trim().to_string(),
-            source_label: format!("环境变量 {provider_var}"),
-        });
+    if let Some(provider_var) = api_key_env.filter(|name| !name.trim().is_empty()) {
+        if let Some(secret) = env.get(provider_var) {
+            return Ok(ResolvedKey {
+                secret: secret.trim().to_string(),
+                source_label: format!("环境变量 {provider_var}"),
+            });
+        }
     }
 
     let store_problem = match store.get(provider) {
@@ -381,7 +398,7 @@ pub fn resolve_api_key(
             secret,
             source_label: format!("本地凭据文件（{}）", file.path().display()),
         }),
-        None => Err(missing_api_key(provider, store_problem)),
+        None => Err(missing_api_key(provider, api_key_env, store_problem)),
     }
 }
 
