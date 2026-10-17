@@ -10,20 +10,14 @@ cmdgen — AI-powered shell command generation for your terminal.
 
 ## 安装
 
-本地开发：
-
-```bash
-cargo install --path .
-```
-
-正式发布提供这些预编译目标：
+从 GitHub Release 下载对应平台的压缩包：
 
 - `aarch64-apple-darwin`
 - `x86_64-apple-darwin`
 - `x86_64-unknown-linux-gnu`
 - `aarch64-unknown-linux-gnu`
 
-GitHub Release 会在打上 `v*` 标签后由 `.github/workflows/release.yml` 构建。macOS 也可以用 `packaging/homebrew/cmdgen.rb` 作为 Homebrew tap 模板；发布前需要填入真实的下载地址和 sha256。安装二进制不会自动修改 `~/.zshrc` 或 `~/.bashrc`。
+安装二进制不会自动修改 `~/.zshrc` 或 `~/.bashrc`。
 
 ## 配置 API Key
 
@@ -167,9 +161,9 @@ cmdgen config set-key --provider bailian
 cmdgen config use bailian
 ```
 
-`api_key_env` 只写环境变量名，不写密钥。百炼预设使用华北 2（北京）的共用域名，不包含业务空间 ID。若要改用业务空间专属域名，运行 `cmdgen config set --provider bailian --base-url <url>`。只想改这一次时，仍用 `--base-url`。`qwen3.8-flash` 于 2026-10-17 对照百炼文本生成文档核对。旧的 `[provider]` 表仍然可以读取；它和 `[providers]` 不能同时出现。其他 OpenAI 兼容服务可以写成 `[providers.<name>]`，或用 `cmdgen config set --provider <name> --base-url <url> --model <model>` 创建。
+`api_key_env` 只写环境变量名，不写密钥。百炼预设使用华北 2（北京）的共用域名，不包含业务空间 ID。若要改用业务空间专属域名，运行 `cmdgen config set --provider bailian --base-url <url>`。只想改这一次时，仍用 `--base-url`。旧的 `[provider]` 表仍然可以读取；它和 `[providers]` 不能同时出现。其他 OpenAI 兼容服务可以写成 `[providers.<name>]`，或用 `cmdgen config set --provider <name> --base-url <url> --model <model>` 创建。
 
-`deepseek-flash` 于 2026-10-17 对照 DeepSeek 官方文档核对。它不是永久有效的常量；如果官方更换模型名，请修改配置和这里的说明。DeepSeek 默认开启思考模式，cmdgen 在 provider 为 `deepseek` 时发送 `thinking.type=disabled`，以便直接返回命令。
+`deepseek-flash` 不是永久有效的模型名。如果官方更换，请修改配置里的 `model`。DeepSeek 默认开启思考模式，cmdgen 在 provider 为 `deepseek` 时发送 `thinking.type=disabled`，以便直接返回命令。
 
 `base_url` 是 API 前缀。客户端只拼接一次 `/chat/completions`，不会重复追加 `/v1`。非本机地址必须使用 HTTPS，且不能关闭证书校验。`127.0.0.1` 和 `localhost` 允许 HTTP，便于连接本机兼容服务。
 
@@ -253,18 +247,6 @@ cmdgen doctor
 - **Bash 没有反应**：确认 `bash --version` 至少是 4，并且已经 `source ~/.bashrc`。
 - **快捷键冲突**：安装时如果发现已有绑定会警告。把 `shell.keybinding` 改成其他 `ctrl-<字母>` 后重新安装。
 
-## 开发
-
-```bash
-cargo fmt --all
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
-```
-
-测试使用本地 mock，不需要真实的 DeepSeek Key。
-
-手工验收时建议覆盖：直接命令、中文输入、快捷键替换、失败后保留输入、编辑后再执行、环境变量和钥匙串两种 Key、无 Key、错误 Key、断网、超时、HTTP 429/5xx、重复安装和卸载。Apple Silicon、Intel、Linux x86_64 和 Linux ARM64 都要分别看二进制能否启动。
-
 ## 已知限制
 
 - 不做通用聊天、多轮对话、代码生成、Agent、工具调用或 MCP。
@@ -272,3 +254,5 @@ cargo test --all-targets
 - 不缓存请求，也不提供常驻守护进程。
 - Windows 不在本版本的发布范围内。
 - 模型输出只是建议，语法和语义都可能是错的。
+
+维护本仓库见 [DEV.md](DEV.md)。
