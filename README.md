@@ -34,7 +34,7 @@ cmdgen config init
 cmdgen config set-key
 ```
 
-`set-key` 会隐藏输入，并保存到系统凭据存储：服务名 `cmdgen`，账号为当前 provider 名称。macOS 使用钥匙串；Linux 使用 Secret Service。凭据存储不可用时，仍然可以使用环境变量。
+`set-key` 会隐藏输入。系统凭据存储可用时，Key 保存到服务名 `cmdgen`、账号为当前 provider 名称的条目。macOS 使用登录钥匙串；Linux 使用 Secret Service。凭据存储不可用时，`set-key` 写入 `credentials.toml`（与 `config.toml` 同目录，权限 `0600`）。关掉终端后再打开仍然有效。同一用户下的其他进程可以读取该文件。容器和 CI 不依赖这个文件，请在每次启动时注入 `CMDGEN_API_KEY`。
 
 删除已保存的凭据：
 
@@ -113,6 +113,7 @@ API Key 使用单独的顺序：
 1. `CMDGEN_API_KEY`
 2. DeepSeek 使用 `DEEPSEEK_API_KEY`；其他 provider 使用 `OPENAI_API_KEY`
 3. 系统凭据存储中、账号等于 provider 名称的凭据
+4. 本地凭据文件 `credentials.toml` 中、同一 provider 的凭据
 
 默认配置：
 
@@ -198,7 +199,7 @@ cmdgen doctor
 ## 安全
 
 - 不执行模型输出，没有 `--execute`。
-- 不把 Key 写入配置、日志、错误信息或 Shell 历史。不要运行 `cmdgen config set-key <密钥>`。
+- 不把 Key 写入 `config.toml`、日志、错误信息或 Shell 历史。不要运行 `cmdgen config set-key <密钥>`。系统凭据存储不可用时，Key 只写入权限为 `0600` 的 `credentials.toml`。
 - 默认不记录 prompt、响应或命令历史，也不上传环境变量和文件内容。
 - 只使用 HTTPS。远程地址不能关闭 TLS 证书校验。
 - 提示词会要求模型优先给出非破坏性命令。这不能消除风险，执行前必须自己检查。
@@ -206,7 +207,7 @@ cmdgen doctor
 
 ## 故障排查
 
-- **未找到 API Key**：运行 `cmdgen config set-key`，或导出 `CMDGEN_API_KEY`。Linux 上没有 Secret Service 时，环境变量仍然可用。
+- **未找到 API Key**：运行 `cmdgen config set-key`，或导出 `CMDGEN_API_KEY`。没有钥匙串或 Secret Service 时，`set-key` 会把 Key 写入 `credentials.toml`。只在当前终端临时使用时，导出环境变量即可，关闭终端后失效。
 - **base_url 无效**：去掉末尾的 `/chat/completions`，并确认远程地址是 `https://`。
 - **请求超时**：增大 `generation.timeout_secs` 或设置 `CMDGEN_TIMEOUT`。默认 20 秒，不会自动重试。
 - **返回解释文字**：cmdgen 会拒绝明显的说明文本。把需求写得更具体后重试。

@@ -1,10 +1,42 @@
 mod common;
 
 use cmdgen::config::{
-    load_effective, merge, parse_config, resolve_api_key, EnvMap, FileConfig, MemoryStore,
-    Overrides, SecretStore, DEFAULT_CONFIG_TOML,
+    delete_api_key, load_effective, merge, parse_config, resolve_api_key, save_api_key,
+    CredentialFile, EnvMap, FileConfig, MemoryStore, Overrides, SavedKey, SecretStore,
+    DEFAULT_CONFIG_TOML,
 };
 use cmdgen::shell::detect::resolve_shell;
+
+struct UnavailableStore;
+
+impl SecretStore for UnavailableStore {
+    fn get(&self, _account: &str) -> Result<Option<String>, cmdgen::Error> {
+        Err(cmdgen::Error::CredentialStoreUnavailable {
+            reason: "测试环境没有凭据存储".into(),
+        })
+    }
+
+    fn set(&self, _account: &str, _secret: &str) -> Result<(), cmdgen::Error> {
+        Err(cmdgen::Error::CredentialStoreUnavailable {
+            reason: "测试环境没有凭据存储".into(),
+        })
+    }
+
+    fn delete(&self, _account: &str) -> Result<bool, cmdgen::Error> {
+        Err(cmdgen::Error::CredentialStoreUnavailable {
+            reason: "测试环境没有凭据存储".into(),
+        })
+    }
+}
+
+fn credential_file(sandbox: &common::Sandbox) -> CredentialFile {
+    CredentialFile::new(sandbox.config_dir().join("credentials.toml"))
+}
+
+fn unix_mode(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
 
 fn env_with_home(sandbox: &common::Sandbox) -> EnvMap {
     let mut env = EnvMap::new();
@@ -123,43 +155,160 @@ fn unknown_provider_without_endpoint_is_rejected() {
 }
 
 #[test]
-fn api_key_priority_prefers_cmdgen_then_provider_env_then_store() {
+fn api_key_priority_prefers_env_then_store_then_file() {
+    let sandbox = common::Sandbox::new();
     let store = MemoryStore::default();
     store.set("deepseek", "from-store-secret").unwrap();
+    let file = credential_file(&sandbox);
+    file.set("deepseek", "from-file-secret").unwrap();
     let mut env = EnvMap::new();
     env.set("CMDGEN_API_KEY", "from-cmdgen-secret");
     env.set("DEEPSEEK_API_KEY", "from-deepseek-secret");
     env.set("OPENAI_API_KEY", "from-openai-secret");
 
-    let resolved = resolve_api_key("deepseek", &env, &store).unwrap();
+    let resolved = resolve_api_key("deepseek", &env, &store, &file).unwrap();
     assert_eq!(resolved.secret, "from-cmdgen-secret");
     assert!(resolved.source_label.contains("CMDGEN_API_KEY"));
 
     let mut env = EnvMap::new();
     env.set("DEEPSEEK_API_KEY", "from-deepseek-secret");
     env.set("OPENAI_API_KEY", "from-openai-secret");
-    let resolved = resolve_api_key("deepseek", &env, &store).unwrap();
+    let resolved = resolve_api_key("deepseek", &env, &store, &file).unwrap();
     assert_eq!(resolved.secret, "from-deepseek-secret");
 
-    let resolved = resolve_api_key("openai", &env, &store).unwrap();
+    let resolved = resolve_api_key("openai", &env, &store, &file).unwrap();
     assert_eq!(resolved.secret, "from-openai-secret");
 
     let env = EnvMap::new();
     store.set("custom", "from-custom-store").unwrap();
-    let resolved = resolve_api_key("custom", &env, &store).unwrap();
+    let resolved = resolve_api_key("custom", &env, &store, &file).unwrap();
     assert_eq!(resolved.secret, "from-custom-store");
     assert!(resolved.source_label.contains("custom"));
+
+    let resolved = resolve_api_key("deepseek", &env, &store, &file).unwrap();
+    assert_eq!(resolved.secret, "from-store-secret");
+    assert!(resolved.source_label.contains("系统凭据存储"));
+
+    let empty = MemoryStore::default();
+    let resolved = resolve_api_key("deepseek", &env, &empty, &file).unwrap();
+    assert_eq!(resolved.secret, "from-file-secret");
+    assert!(resolved.source_label.contains("本地凭据文件"));
+    assert!(!resolved.source_label.contains("from-file-secret"));
+
+    let resolved = resolve_api_key("deepseek", &env, &UnavailableStore, &file).unwrap();
+    assert_eq!(resolved.secret, "from-file-secret");
 }
 
 #[test]
-fn missing_key_message_does_not_require_keyring() {
-    let Err(err) = resolve_api_key("deepseek", &EnvMap::new(), &MemoryStore::default()) else {
+fn missing_key_message_mentions_file_fallback() {
+    let sandbox = common::Sandbox::new();
+    let file = credential_file(&sandbox);
+    let Err(err) = resolve_api_key("deepseek", &EnvMap::new(), &MemoryStore::default(), &file)
+    else {
         panic!("应当缺少 API Key");
     };
     let text = err.to_string();
     assert!(text.contains("CMDGEN_API_KEY"));
     assert!(text.contains("DEEPSEEK_API_KEY"));
     assert!(text.contains("set-key"));
+    assert!(text.contains("credentials.toml"));
+
+    let Err(err) = resolve_api_key("deepseek", &EnvMap::new(), &UnavailableStore, &file) else {
+        panic!("应当缺少 API Key");
+    };
+    let text = err.to_string();
+    assert!(text.contains("系统凭据存储当前不可用"));
+    assert!(text.contains("credentials.toml"));
+}
+
+#[test]
+fn saving_to_the_store_removes_the_same_provider_from_the_file() {
+    let sandbox = common::Sandbox::new();
+    let file = credential_file(&sandbox);
+    file.set("deepseek", "old-file-secret").unwrap();
+    file.set("openai", "keep-openai-secret").unwrap();
+    let store = MemoryStore::default();
+    let saved = save_api_key("deepseek", " new-store-secret ", &store, &file).unwrap();
+    assert_eq!(
+        saved,
+        SavedKey::Keyring {
+            removed_file_entry: true
+        }
+    );
+    assert_eq!(
+        store.get("deepseek").unwrap().as_deref(),
+        Some("new-store-secret")
+    );
+    assert!(file.get("deepseek").unwrap().is_none());
+    assert_eq!(
+        file.get("openai").unwrap().as_deref(),
+        Some("keep-openai-secret")
+    );
+    assert!(file.path().exists());
+}
+
+#[test]
+fn saving_without_a_store_writes_a_private_credentials_file() {
+    let sandbox = common::Sandbox::new();
+    let file = credential_file(&sandbox);
+    let saved = save_api_key("my.provider", " file-secret ", &UnavailableStore, &file).unwrap();
+    assert_eq!(
+        saved,
+        SavedKey::File {
+            path: file.path().to_path_buf()
+        }
+    );
+    assert_eq!(
+        file.get("my.provider").unwrap().as_deref(),
+        Some("file-secret")
+    );
+    assert_eq!(unix_mode(file.path()), 0o600);
+    assert_eq!(unix_mode(file.path().parent().unwrap()), 0o700);
+
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644)).unwrap();
+    file.set("my.provider", "rotated-secret").unwrap();
+    assert_eq!(unix_mode(file.path()), 0o600);
+    assert_eq!(
+        file.get("my.provider").unwrap().as_deref(),
+        Some("rotated-secret")
+    );
+}
+
+#[test]
+fn delete_removes_store_and_file_entries() {
+    let sandbox = common::Sandbox::new();
+    let file = credential_file(&sandbox);
+    let store = MemoryStore::default();
+    store.set("deepseek", "store-secret").unwrap();
+    file.set("deepseek", "file-secret").unwrap();
+    let deleted = delete_api_key("deepseek", &store, &file).unwrap();
+    assert!(deleted.keyring && deleted.file);
+    assert!(store.get("deepseek").unwrap().is_none());
+    assert!(!file.path().exists());
+
+    file.set("deepseek", "file-only-secret").unwrap();
+    let deleted = delete_api_key("deepseek", &UnavailableStore, &file).unwrap();
+    assert!(!deleted.keyring && deleted.file);
+    assert!(!file.path().exists());
+
+    store.set("openai", "store-only-secret").unwrap();
+    let deleted = delete_api_key("openai", &store, &file).unwrap();
+    assert!(deleted.keyring && !deleted.file);
+
+    let err = delete_api_key("deepseek", &MemoryStore::default(), &file).unwrap_err();
+    assert!(err.to_string().contains("没有可删除"));
+    let err = delete_api_key("deepseek", &UnavailableStore, &file).unwrap_err();
+    assert!(err.to_string().contains("系统凭据存储当前不可用"));
+}
+
+#[test]
+fn empty_api_key_is_rejected_before_writing_a_file() {
+    let sandbox = common::Sandbox::new();
+    let file = credential_file(&sandbox);
+    let err = save_api_key("deepseek", "  ", &MemoryStore::default(), &file).unwrap_err();
+    assert!(err.to_string().contains("不能为空"));
+    assert!(!file.path().exists());
 }
 
 #[test]

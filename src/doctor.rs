@@ -1,5 +1,6 @@
 use crate::config::{
-    config_dir, home_dir, load_effective, resolve_api_key, EnvMap, Overrides, SecretStore,
+    config_dir, home_dir, load_effective, resolve_api_key, CredentialFile, EnvMap, Overrides,
+    SecretStore,
 };
 use crate::error::Error;
 use crate::fsutil;
@@ -114,7 +115,8 @@ pub fn diagnose(
         detail: format!("os={} shell={shell}", os_label()),
     });
 
-    match resolve_api_key(&config.provider_name, env, store) {
+    let credentials = CredentialFile::from_env(env)?;
+    match resolve_api_key(&config.provider_name, env, store, &credentials) {
         Ok(key) => checks.push(Check {
             level: Level::Pass,
             name: "API Key".into(),
@@ -136,7 +138,9 @@ pub fn diagnose(
         Err(reason) => checks.push(Check {
             level: Level::Warn,
             name: "凭据存储".into(),
-            detail: format!("当前不可用: {reason}\n仍可使用环境变量 CMDGEN_API_KEY。"),
+            detail: format!(
+                "当前不可用: {reason}\n仍可使用环境变量 CMDGEN_API_KEY。若本地凭据文件中已有 Key，生成命令时仍会读取。"
+            ),
         }),
     }
 

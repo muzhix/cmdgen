@@ -8,7 +8,8 @@ pub use file::{
     InitOutcome, DEFAULT_CONFIG_TOML,
 };
 pub use secrets::{
-    provider_env_var, resolve_api_key, EnvMap, KeyringStore, MemoryStore, ResolvedKey, SecretStore,
+    delete_api_key, provider_env_var, resolve_api_key, save_api_key, CredentialFile, DeletedKey,
+    EnvMap, KeyringStore, MemoryStore, ResolvedKey, SavedKey, SecretStore,
 };
 
 use crate::error::Error;

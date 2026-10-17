@@ -85,7 +85,7 @@ pub(crate) fn missing_api_key(provider: &str, store_problem: Option<String>) -> 
          \n  \
          1. 环境变量 CMDGEN_API_KEY\n  \
          2. 环境变量 {provider_var}\n  \
-         3. 运行 `cmdgen config set-key`，保存到系统凭据存储（服务名 cmdgen，账号 {provider}）\n\
+         3. 运行 `cmdgen config set-key`。优先保存到系统凭据存储（服务名 cmdgen，账号 {provider}）；凭据存储不可用时写入本地凭据文件 credentials.toml\n\
          \n当前 provider: {provider}"
     );
     if let Some(reason) = store_problem {

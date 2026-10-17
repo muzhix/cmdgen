@@ -5,8 +5,9 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::config::{
-    config_dir, home_dir, init_config, key_status_from, load_effective, resolve_api_key, EnvMap,
-    InitOutcome, KeyringStore, Overrides, SecretStore,
+    config_dir, delete_api_key, home_dir, init_config, key_status_from, load_effective,
+    resolve_api_key, save_api_key, CredentialFile, EnvMap, InitOutcome, KeyringStore, Overrides,
+    SavedKey,
 };
 use crate::doctor;
 use crate::error::Error;
@@ -96,9 +97,9 @@ enum ConfigCommand {
     Init,
     /// 显示有效配置（API Key 脱敏）
     Show,
-    /// 隐藏输入 API Key，并保存到系统凭据存储
+    /// 隐藏输入 API Key。优先保存到系统凭据存储；不可用时写入本地凭据文件
     SetKey,
-    /// 删除当前 provider 在系统凭据存储中的 API Key
+    /// 删除当前 provider 在系统凭据存储和本地凭据文件中的 API Key
     DeleteKey {
         /// 跳过确认提示
         #[arg(long)]
@@ -195,7 +196,12 @@ fn generate(prompt: &[String], overrides: &Overrides, verbose: bool) -> Result<i
         env.get("SHELL"),
     )?;
     let endpoint = completions_endpoint(&config.base_url)?;
-    let key = resolve_api_key(&config.provider_name, &env, &KeyringStore)?;
+    let key = resolve_api_key(
+        &config.provider_name,
+        &env,
+        &KeyringStore,
+        &CredentialFile::from_env(&env)?,
+    )?;
     if verbose {
         eprintln!("模型: {}", config.model);
         eprintln!("接口: {endpoint}");
@@ -257,7 +263,12 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
                 env.get("CMDGEN_SHELL"),
                 env.get("SHELL"),
             )?;
-            let resolved = resolve_api_key(&config.provider_name, &env, &KeyringStore);
+            let resolved = resolve_api_key(
+                &config.provider_name,
+                &env,
+                &KeyringStore,
+                &CredentialFile::from_env(&env)?,
+            );
             let status = key_status_from(resolved.as_ref());
             print!("{}", crate::config::render_show(&config, &shell, &status));
             Ok(0)
@@ -269,11 +280,27 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
                     "无法隐藏读取 API Key。请在交互式终端中运行 `cmdgen config set-key`。".into(),
                 )
             })?;
-            KeyringStore.set(&config.provider_name, &secret)?;
-            println!(
-                "已保存到系统凭据存储（服务 cmdgen，账号 {}）。未写入配置文件。",
-                config.provider_name
-            );
+            let file = CredentialFile::from_env(&env)?;
+            match save_api_key(&config.provider_name, &secret, &KeyringStore, &file)? {
+                SavedKey::Keyring { removed_file_entry } => {
+                    println!(
+                        "已保存到系统凭据存储（服务 cmdgen，账号 {}）。未写入配置文件。",
+                        config.provider_name
+                    );
+                    if removed_file_entry {
+                        println!("已删除本地凭据文件中该 provider 的旧 Key。");
+                    }
+                }
+                SavedKey::File { path } => {
+                    println!(
+                        "系统凭据存储不可用，已保存到本地凭据文件: {}",
+                        path.display()
+                    );
+                    println!(
+                        "文件权限为 0600。同一用户下的其他进程可以读取该文件。未写入 config.toml。"
+                    );
+                }
+            }
             Ok(0)
         }
         ConfigCommand::DeleteKey { yes } => {
@@ -282,18 +309,23 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
                 println!("已取消，未删除。");
                 return Ok(0);
             }
-            if KeyringStore.delete(&config.provider_name)? {
-                println!(
+            let file = CredentialFile::from_env(&env)?;
+            let deleted = delete_api_key(&config.provider_name, &KeyringStore, &file)?;
+            match (deleted.keyring, deleted.file) {
+                (true, true) => println!(
+                    "已删除系统凭据存储和本地凭据文件中的 API Key（账号 {}）。",
+                    config.provider_name
+                ),
+                (true, false) => println!(
                     "已删除系统凭据存储中的 API Key（服务 cmdgen，账号 {}）。",
                     config.provider_name
-                );
-                Ok(0)
-            } else {
-                Err(Error::Usage(format!(
-                    "当前 provider（{}）在系统凭据存储中没有可删除的 API Key。",
-                    config.provider_name
-                )))
+                ),
+                (false, true) => {
+                    println!("已删除本地凭据文件中的 API Key: {}", file.path().display())
+                }
+                (false, false) => unreachable!("任一侧未删除时 delete_api_key 会返回错误"),
             }
+            Ok(0)
         }
     }
 }
@@ -386,7 +418,7 @@ fn confirm_delete() -> Result<bool, Error> {
             "删除凭据需要确认。请在终端中运行，或加上 --yes。".into(),
         ));
     }
-    eprint!("将从系统凭据存储删除当前 provider 的 API Key。输入 yes 确认: ");
+    eprint!("将删除当前 provider 在系统凭据存储和本地凭据文件中的 API Key。输入 yes 确认: ");
     let _ = io::stderr().flush();
     let mut line = String::new();
     io::stdin()
