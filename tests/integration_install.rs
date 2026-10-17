@@ -74,6 +74,8 @@ fn install_twice_and_uninstall_round_trip() {
     assert!(script.contains("bindkey '^G'"));
     assert!(script.contains("CMDGEN_SHELL=zsh"));
     assert!(script.contains("command cmdgen --"));
+    assert!(script.contains("zle redisplay"));
+    assert!(!script.contains("zle reset-prompt"));
     assert!(!script.contains("eval "));
 
     let reports = uninstall(&[IntegrationShell::Zsh], home, &dir).unwrap();
@@ -111,6 +113,44 @@ fn cli_install_and_uninstall_are_idempotent() {
         .stdout(contains("已卸载"));
     let rc = fs::read_to_string(sandbox.home.join(".zshrc")).unwrap();
     assert!(!rc.contains(MANAGED_BEGIN));
+}
+
+#[test]
+fn zsh_redisplay_keeps_prompt_around_generated_command() {
+    let sandbox = common::Sandbox::new();
+    install(
+        IntegrationShell::Zsh,
+        &sandbox.home,
+        &sandbox.config_dir(),
+        "ctrl-g",
+    )
+    .unwrap();
+    let bin = sandbox.dir.path().join("bin");
+    common::write_executable(&bin.join("cmdgen"), FAKE_CMDGEN);
+    let widget = sandbox.config_dir().join("integration.zsh");
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(include_str!("zsh_redraw.py"))
+        .env("CMDGEN_WIDGET", &widget)
+        .env("CMDGEN_BIN", &bin)
+        .env("CMDGEN_FAKE_OUTPUT", "docker ps -a")
+        .output()
+        .expect("python3");
+    let text = format!(
+        "status={}\nstdout={}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains("LINE=hanbd@mbp cmdgen % docker ps -a"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("列出所有docker容器docker ps -a"),
+        "{text}"
+    );
 }
 
 #[test]

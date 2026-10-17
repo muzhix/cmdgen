@@ -6,8 +6,8 @@ _cmdgen_widget() {
   emulate -L zsh
   setopt localoptions noshwordsplit
 
-  local prompt="${BUFFER}"
-  if [[ -z "${prompt//[[:space:]]/}" ]]; then
+  local input="${BUFFER}"
+  if [[ -z "${input//[[:space:]]/}" ]]; then
     return 0
   fi
 
@@ -19,7 +19,7 @@ _cmdgen_widget() {
 
   zle -R "cmdgen: 正在生成…"
 
-  result="$(CMDGEN_SHELL=zsh command cmdgen -- "$prompt" 2>"$errfile")"
+  result="$(CMDGEN_SHELL=zsh command cmdgen -- "$input" 2>"$errfile")"
   cmd_status=$?
 
   if [[ $cmd_status -eq 0 && -n "$result" ]]; then
@@ -35,11 +35,16 @@ _cmdgen_widget() {
     if [[ ${#err} -gt 500 ]]; then
       err="${err:0:500}"
     fi
-    zle -M "$err"
   fi
 
   command rm -f "$errfile"
-  zle reset-prompt
+  # zle -R leaves the cursor on the status row. An incremental redraw then
+  # keeps the old input and paints the new command over the prompt.
+  # redisplay clears from column 0 and paints the prompt again.
+  zle redisplay
+  if [[ -n "$err" ]]; then
+    zle -M "$err"
+  fi
 }
 
 if [[ -o interactive ]]; then
