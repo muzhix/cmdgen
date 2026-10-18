@@ -1151,16 +1151,91 @@ fn prompt_line(prompt: &str) -> Result<Option<String>, Error> {
     io::stderr()
         .flush()
         .map_err(|err| Error::io("stderr", err))?;
-    let mut line = String::new();
-    io::stdin()
-        .read_line(&mut line)
-        .map_err(|err| Error::io("stdin", err))?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(trimmed.to_string()))
+    match read_console_line()? {
+        ConsoleLine::Submit(text) if !text.is_empty() => Ok(Some(text)),
+        _ => Ok(None),
     }
+}
+
+enum ConsoleLine {
+    Submit(String),
+    Cancel,
+}
+
+/// 在 raw mode 里逐字节读一行，不用 `Stdin::read_line`。
+///
+/// Linux 上，规范模式的一次 `read` 会把 raw mode 期间已经排进队列的字节全部返回。
+/// `read_line` 只消费第一行，剩下的留在 `Stdin` 的用户态缓冲里；
+/// 菜单随后用 `read_byte` 直接读 fd，读不到这些字节，于是一直阻塞。
+/// macOS 的规范模式按行返回，队列里的后续按键仍留给下一次读取。
+fn read_console_line() -> Result<ConsoleLine, Error> {
+    enable_raw_mode().map_err(|err| Error::io("stdin", err))?;
+    let guard = TerminalGuard {
+        lines: 0,
+        raw: true,
+    };
+    let mut line = String::new();
+    let mut err = io::stderr();
+    let submitted = loop {
+        match read_byte()? {
+            b'\r' | b'\n' => break true,
+            0x03 => break false,
+            0x1b => {
+                if let Some(KeyCode::Esc) = read_escape()? {
+                    break false;
+                }
+            }
+            0x7f | 0x08 => {
+                if line.pop().is_some() {
+                    write!(err, "\u{8} \u{8}").map_err(|err| Error::io("stderr", err))?;
+                    err.flush().map_err(|err| Error::io("stderr", err))?;
+                }
+            }
+            first => {
+                let Some(ch) = decode_char(first)? else {
+                    continue;
+                };
+                if ch.is_control() {
+                    continue;
+                }
+                line.push(ch);
+                write!(err, "{ch}").map_err(|err| Error::io("stderr", err))?;
+                err.flush().map_err(|err| Error::io("stderr", err))?;
+            }
+        }
+    };
+    write!(err, "\r\n").map_err(|err| Error::io("stderr", err))?;
+    err.flush().map_err(|err| Error::io("stderr", err))?;
+    drop(guard);
+    if submitted {
+        Ok(ConsoleLine::Submit(line.trim().to_string()))
+    } else {
+        Ok(ConsoleLine::Cancel)
+    }
+}
+
+fn decode_char(first: u8) -> Result<Option<char>, Error> {
+    if first < 0x80 {
+        return Ok(Some(first as char));
+    }
+    let width = match first {
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => return Ok(None),
+    };
+    let mut buf = [first, 0, 0, 0];
+    for slot in &mut buf[1..width] {
+        let byte = read_byte()?;
+        if byte & 0xC0 != 0x80 {
+            push_byte(byte);
+            return Ok(None);
+        }
+        *slot = byte;
+    }
+    Ok(std::str::from_utf8(&buf[..width])
+        .ok()
+        .and_then(|text| text.chars().next()))
 }
 
 /// 在 stderr 上画出菜单。`None` 表示 Esc 或 Ctrl-C。
@@ -1199,8 +1274,7 @@ fn menu_lines(title: &str, items: &[String], index: usize) -> Vec<String> {
     lines
 }
 
-/// 一次只从终端读一个按键，剩下的字节留在输入队列里。
-/// 退出 raw mode 之后，`read_line` 和隐藏输入才能读到已经键入的内容。
+/// 一次只从终端读一个按键，剩下的字节留在输入队列里，交给下一次 `read_byte`。
 /// `Ctrl-C` 变成 `KeyCode::Char('c')`，调用方把它当作取消。
 fn read_key() -> Result<KeyCode, Error> {
     loop {
@@ -1333,11 +1407,10 @@ fn confirm_delete(name: &str) -> Result<bool, Error> {
         fill(i18n::t().prompt_confirm_delete, &[("name", name)])
     );
     let _ = io::stderr().flush();
-    let mut line = String::new();
-    io::stdin()
-        .read_line(&mut line)
-        .map_err(|err| Error::io("stdin", err))?;
-    Ok(line.trim() == "yes")
+    Ok(matches!(
+        read_console_line()?,
+        ConsoleLine::Submit(text) if text == "yes"
+    ))
 }
 
 fn reject_inline_secret(args: &[OsString]) -> Result<(), Error> {

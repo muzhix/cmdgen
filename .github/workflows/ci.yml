@@ -2,6 +2,10 @@ name: CI
 
 on:
   push:
+    # Tag pushes are handled by release.yml. A bare `push:` matches tags too,
+    # which runs this workflow a second time for the same commit.
+    branches:
+      - "**"
   pull_request:
 
 jobs:
