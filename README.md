@@ -1,6 +1,6 @@
 # cmdgen
 
-[![CI](https://github.com/muzhix/cmdgen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/muzhix/cmdgen/actions/workflows/ci.yml)[![Release](https://github.com/muzhix/cmdgen/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/muzhix/cmdgen/actions/workflows/release.yml)
+[![CI](https://github.com/muzhix/cmdgen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/muzhix/cmdgen/actions/workflows/ci.yml)[![Release](https://github.com/muzhix/cmdgen/actions/workflows/release.yml/badge.svg)](https://github.com/muzhix/cmdgen/actions/workflows/release.yml)
 
 > cmdgen — AI-powered shell command generation for your terminal.
 
