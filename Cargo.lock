@@ -392,7 +392,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "cmdgen"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "assert_cmd",
  "clap",

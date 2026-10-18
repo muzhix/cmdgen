@@ -298,7 +298,7 @@ fn version_help_and_reserved_subcommand() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(contains("cmdgen 0.1.4"));
+        .stdout(contains("cmdgen 0.1.5"));
     sandbox
         .command()
         .arg("--help")
