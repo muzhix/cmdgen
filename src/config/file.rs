@@ -146,11 +146,11 @@ pub fn apply_parsed_language(file: &FileConfig, path: &Path) -> Result<Lang, Err
         return Ok(Lang::En);
     };
     match i18n::parse_lang_code(raw) {
-        Ok(lang) => {
+        Some(lang) => {
             i18n::apply_config_language(lang);
             Ok(lang)
         }
-        Err(()) => Err(Error::Usage(format!(
+        None => Err(Error::Usage(format!(
             "invalid config ({}): {}",
             path.display(),
             i18n::unknown_language_message(raw)

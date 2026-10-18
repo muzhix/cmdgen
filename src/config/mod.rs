@@ -73,7 +73,7 @@ pub fn peek_language(env: &EnvMap) -> Option<crate::i18n::Lang> {
     let text = crate::fsutil::read_to_string(&path).ok()?;
     let file: FileConfig = toml::from_str(&text).ok()?;
     let raw = file::trimmed(&file.language)?;
-    crate::i18n::parse_lang_code(raw).ok()
+    crate::i18n::parse_lang_code(raw)
 }
 
 pub fn load_effective(env: &EnvMap, overrides: &Overrides) -> Result<EffectiveConfig, Error> {

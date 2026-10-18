@@ -171,7 +171,7 @@ fn prepare_language(args: &[OsString]) -> Result<(), Error> {
     i18n::reset_language();
     if let Some(code) = flag_value(args, "--lang") {
         let lang = i18n::parse_lang_code(&code)
-            .map_err(|_| Error::Usage(i18n::unknown_language_message(&code)))?;
+            .ok_or_else(|| Error::Usage(i18n::unknown_language_message(&code)))?;
         i18n::set_explicit(lang);
         return Ok(());
     }
@@ -179,7 +179,7 @@ fn prepare_language(args: &[OsString]) -> Result<(), Error> {
         let code = code.trim();
         if !code.is_empty() {
             let lang = i18n::parse_lang_code(code)
-                .map_err(|_| Error::Usage(i18n::unknown_language_message(code)))?;
+                .ok_or_else(|| Error::Usage(i18n::unknown_language_message(code)))?;
             i18n::set_explicit(lang);
             return Ok(());
         }
@@ -727,20 +727,14 @@ fn integration_command(overrides: &Overrides, action: IntegrationCommand) -> Res
                     );
                 }
                 if report.removed_block {
+                    let name = report
+                        .rc_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
                     println!(
                         "{}",
-                        fill(
-                            i18n::t().line_source,
-                            &[(
-                                "name",
-                                &report
-                                    .rc_path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .into_owned(),
-                            )]
-                        )
+                        fill(i18n::t().line_source, &[("name", name.as_ref())])
                     );
                 }
             }

@@ -259,11 +259,12 @@ pub fn apply_config_language(lang: Lang) {
 }
 
 /// `en` and `en-US` are English. `zh`, `zh-CN`, and `zh-Hans` are Chinese.
-pub fn parse_lang_code(raw: &str) -> Result<Lang, ()> {
+/// Unknown codes return `None`; callers build their own message.
+pub fn parse_lang_code(raw: &str) -> Option<Lang> {
     match raw.trim().to_ascii_lowercase().as_str() {
-        "en" | "en-us" => Ok(Lang::En),
-        "zh" | "zh-cn" | "zh-hans" => Ok(Lang::Zh),
-        _ => Err(()),
+        "en" | "en-us" => Some(Lang::En),
+        "zh" | "zh-cn" | "zh-hans" => Some(Lang::Zh),
+        _ => None,
     }
 }
 
@@ -290,14 +291,14 @@ mod tests {
 
     #[test]
     fn aliases_map_onto_en_and_zh() {
-        assert_eq!(parse_lang_code("en").unwrap(), Lang::En);
-        assert_eq!(parse_lang_code("en-US").unwrap(), Lang::En);
-        assert_eq!(parse_lang_code("EN-us").unwrap(), Lang::En);
-        assert_eq!(parse_lang_code("zh").unwrap(), Lang::Zh);
-        assert_eq!(parse_lang_code("zh-CN").unwrap(), Lang::Zh);
-        assert_eq!(parse_lang_code("zh-Hans").unwrap(), Lang::Zh);
-        assert!(parse_lang_code("fr").is_err());
-        assert!(parse_lang_code("zh-Hant").is_err());
+        assert_eq!(parse_lang_code("en"), Some(Lang::En));
+        assert_eq!(parse_lang_code("en-US"), Some(Lang::En));
+        assert_eq!(parse_lang_code("EN-us"), Some(Lang::En));
+        assert_eq!(parse_lang_code("zh"), Some(Lang::Zh));
+        assert_eq!(parse_lang_code("zh-CN"), Some(Lang::Zh));
+        assert_eq!(parse_lang_code("zh-Hans"), Some(Lang::Zh));
+        assert_eq!(parse_lang_code("fr"), None);
+        assert_eq!(parse_lang_code("zh-Hant"), None);
     }
 
     #[test]
