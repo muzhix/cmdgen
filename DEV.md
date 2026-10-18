@@ -31,7 +31,13 @@ cargo test --all-targets
 - `x86_64-unknown-linux-gnu`
 - `aarch64-unknown-linux-gnu`
 
-GitHub Release 会在打上 `v*` 标签后由 `.github/workflows/release.yml` 构建。macOS 也可以用 `packaging/homebrew/cmdgen.rb` 作为 Homebrew tap 模板；发布前需要填入真实的下载地址和 sha256。
+GitHub Release 会在打上 `v*` 标签后由 `.github/workflows/release.yml` 构建，并附带 `SHA256SUMS`。用户侧一键安装是仓库根目录的 `install.sh`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash
+```
+
+脚本只放置二进制，不修改 shell 启动文件。`bash tests/install_smoke.sh` 用本地压缩包覆盖安装、校验失败、卸载和管道执行，不访问网络。macOS 也可以用 `packaging/homebrew/cmdgen.rb` 作为 Homebrew tap 模板；发布前需要填入真实的下载地址和 sha256。
 
 ## 内置模型名
 

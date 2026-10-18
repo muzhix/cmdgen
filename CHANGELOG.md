@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 提供 `install.sh`，可以用 `curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash` 安装预编译二进制。
 - 配置文件可以保存多家 OpenAI 兼容 provider，并用 `cmdgen config use` 或 `--provider` 切换。
 - 内置预设为 DeepSeek 和阿里云百炼，默认启用 DeepSeek。
 - `cmdgen config set` 可以把 provider 的 `model` 和 `base_url` 写入配置文件。

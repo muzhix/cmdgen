@@ -12,14 +12,39 @@
 
 ## 安装
 
-从 GitHub Release 下载对应平台的压缩包：
+macOS 和 Linux 可以一条命令安装最新的预编译二进制：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash
+```
+
+脚本按当前系统选择 GitHub Release 里的压缩包，校验 sha256（发布里带有 `SHA256SUMS` 时），并安装到已经在 `PATH` 里、且当前用户可写的目录，优先 `~/.local/bin`。不会修改 `~/.zshrc` 或 `~/.bashrc`。
+
+指定版本或目录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash -s -- --version v0.1.1
+CMDGEN_BIN_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash
+```
+
+如果安装目录不在 `PATH` 里，脚本会打印需要加到启动文件的那一行，但不会自己写入。
+
+只删除二进制，不删除配置和凭据：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash -s -- --uninstall
+```
+
+启动文件里还有 Shell 集成时，卸载会停下来，并提示先运行 `cmdgen shell uninstall`。
+
+也可以从 GitHub Release 下载对应平台的压缩包后，自行把里面的 `cmdgen` 放到 `PATH`：
 
 - `aarch64-apple-darwin`
 - `x86_64-apple-darwin`
 - `x86_64-unknown-linux-gnu`
 - `aarch64-unknown-linux-gnu`
 
-安装二进制不会自动修改 `~/.zshrc` 或 `~/.bashrc`。
+Windows 不在发布范围内。
 
 ## 配置 API Key
 

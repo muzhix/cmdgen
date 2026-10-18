@@ -27,3 +27,5 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --all-targets
+      - name: Installer
+        run: bash tests/install_smoke.sh
