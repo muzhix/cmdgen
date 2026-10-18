@@ -193,3 +193,97 @@ fn alias_en_us_in_config_resolves_to_en() {
     let stdout = stdout_of(&sandbox, &["--help"]);
     assert!(stdout.contains("不会执行生成的命令"));
 }
+
+#[test]
+fn config_lang_help_follows_the_interface_language() {
+    let sandbox = common::Sandbox::new();
+    let stdout = stdout_of(&sandbox, &["config", "lang", "--help"]);
+    assert!(stdout.contains("arrow keys"));
+    assert!(!has_cjk(&stdout), "{stdout}");
+
+    let stdout = stdout_of(&sandbox, &["config", "lang", "--lang", "zh", "--help"]);
+    assert!(stdout.contains("上下键"));
+}
+
+#[test]
+fn config_lang_without_a_terminal_does_not_write() {
+    let sandbox = common::Sandbox::new();
+    write_config(&sandbox, "language = \"en\"\n");
+    let output = sandbox.command().args(["config", "lang"]).output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("interactive terminal"), "{stderr}");
+    assert!(!has_cjk(&stderr), "{stderr}");
+    let text = fs::read_to_string(sandbox.config_dir().join("config.toml")).unwrap();
+    assert!(text.contains("language = \"en\""));
+
+    let output = sandbox
+        .command()
+        .args(["config", "lang", "--lang", "zh"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("需要交互式终端"), "{stderr}");
+    let text = fs::read_to_string(sandbox.config_dir().join("config.toml")).unwrap();
+    assert_eq!(text, "language = \"en\"\n");
+}
+
+#[test]
+fn config_lang_arrow_selects_chinese_and_esc_cancels() {
+    let sandbox = common::Sandbox::new();
+    write_config(&sandbox, "language = \"en\"\n");
+    let output = tty_menu(&sandbox, "1b5b420d", &["config", "lang"]);
+    let visible = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "status={:?}\nvisible={visible}",
+        output.status
+    );
+    assert!(visible.contains("已切换界面语言: zh"), "visible={visible}");
+    let text = fs::read_to_string(sandbox.config_dir().join("config.toml")).unwrap();
+    assert!(text.contains("language = \"zh\""), "{text}");
+    assert!(!text.contains("language = \"en\""));
+    let shown = stdout_of(&sandbox, &["config", "show"]);
+    assert!(shown.contains("language: zh"));
+    assert!(shown.contains("配置文件:"));
+
+    write_config(&sandbox, "language = \"en\"\n");
+    let output = tty_menu(&sandbox, "1b", &["config", "lang"]);
+    let visible = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "status={:?}\nvisible={visible}",
+        output.status
+    );
+    assert!(visible.contains("cancelled"), "visible={visible}");
+    let text = fs::read_to_string(sandbox.config_dir().join("config.toml")).unwrap();
+    assert_eq!(text, "language = \"en\"\n");
+}
+
+fn tty_menu(sandbox: &common::Sandbox, keys_hex: &str, args: &[&str]) -> std::process::Output {
+    let mut cmd = assert_cmd::Command::new("python3");
+    cmd.arg("-c")
+        .arg(include_str!("tty_menu.py"))
+        .arg(env!("CARGO_BIN_EXE_cmdgen"))
+        .args(args)
+        .env("HOME", &sandbox.home)
+        .env("XDG_CONFIG_HOME", &sandbox.config_home)
+        .env("SHELL", "/bin/zsh")
+        .env("CMDGEN_TTY_KEYS", keys_hex)
+        .env("CMDGEN_TTY_MARKER", "English (en)")
+        .env_remove("CMDGEN_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("DASHSCOPE_API_KEY")
+        .env_remove("CMDGEN_BASE_URL")
+        .env_remove("CMDGEN_MODEL")
+        .env_remove("CMDGEN_PROVIDER")
+        .env_remove("CMDGEN_SHELL")
+        .env_remove("CMDGEN_TIMEOUT")
+        .env_remove("CMDGEN_LANG")
+        .env_remove("CMDGEN_DEBUG")
+        .timeout(std::time::Duration::from_secs(15));
+    cmd.output().expect("python3 pty")
+}

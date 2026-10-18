@@ -5,11 +5,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use crossterm::cursor::{Hide, Show};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use crate::config::{
     activate_provider, config_dir, config_path, delete_api_key, home_dir, init_config,
-    key_status_from, load_effective, render_providers, resolve_api_key, save_api_key,
-    update_provider, CredentialFile, EnvMap, InitOutcome, KeyringStore, Overrides, SavedKey,
+    key_status_from, load_config, load_effective, render_providers, resolve_api_key, save_api_key,
+    set_language, update_provider, CredentialFile, EnvMap, InitOutcome, KeyringStore, Overrides,
+    SavedKey,
 };
 use crate::doctor;
 use crate::error::Error;
@@ -107,6 +112,8 @@ enum ConfigCommand {
         /// Configured provider name, or the deepseek / bailian preset
         name: String,
     },
+    /// Choose the interface language with the arrow keys and write it to the config file
+    Lang,
     /// Write --model or --base-url to the config file. With no --provider, update the current active provider
     Set,
     /// Read an API key without echoing it. Prefer the system credential store; otherwise write the local credential file
@@ -254,6 +261,7 @@ fn localized_command() -> clap::Command {
         let config = set_about(config, "show", m.help_config_show);
         let config = set_about(config, "providers", m.help_config_providers);
         let config = set_about(config, "use", m.help_config_use);
+        let config = set_about(config, "lang", m.help_config_lang);
         let config = set_about(config, "set", m.help_config_set);
         let config = set_about(config, "set-key", m.help_config_set_key);
         let config = set_about(config, "delete-key", m.help_config_delete_key);
@@ -542,6 +550,7 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
                 Err(err) => Err(err),
             }
         }
+        ConfigCommand::Lang => config_lang(&env),
         ConfigCommand::Set => {
             let path = config_path(&env)?;
             match update_provider(
@@ -794,6 +803,141 @@ fn display_shell(shell: IntegrationShell) -> &'static str {
     }
 }
 
+fn config_lang(env: &EnvMap) -> Result<i32, Error> {
+    let path = config_path(env)?;
+    match load_config(&path) {
+        Ok(_) => {}
+        Err(Error::ConfigNotFound { .. }) => {
+            return Err(Error::Usage(i18n::t().err_no_config.into()));
+        }
+        Err(err) => return Err(err),
+    }
+    if !io::stdin().is_terminal() {
+        return Err(Error::Usage(i18n::t().err_lang_not_a_terminal.into()));
+    }
+    let Some(selected) = select_language(i18n::current())? else {
+        println!("{}", i18n::t().cancelled);
+        return Ok(0);
+    };
+    match set_language(&path, selected) {
+        Ok(()) => {
+            let messages = i18n::messages(selected);
+            println!(
+                "{}",
+                fill(
+                    messages.switched_language,
+                    &[("language", selected.as_str())]
+                )
+            );
+            println!(
+                "{}",
+                fill(
+                    messages.config_path_line,
+                    &[("path", &path.display().to_string())]
+                )
+            );
+            Ok(0)
+        }
+        Err(Error::ConfigNotFound { .. }) => Err(Error::Usage(i18n::t().err_no_config.into())),
+        Err(err) => Err(err),
+    }
+}
+
+const LANGUAGE_CHOICES: [(Lang, &str); 2] = [(Lang::En, "English (en)"), (Lang::Zh, "中文 (zh)")];
+
+/// 在 stderr 上画出语言菜单。`None` 表示用户取消，文件不会被修改。
+fn select_language(current: Lang) -> Result<Option<Lang>, Error> {
+    enable_raw_mode().map_err(|err| Error::io("stdin", err))?;
+    let mut guard = TerminalGuard {
+        lines: 0,
+        raw: true,
+    };
+    execute!(io::stderr(), Hide).map_err(|err| Error::io("stderr", err))?;
+    let mut index = LANGUAGE_CHOICES
+        .iter()
+        .position(|(lang, _)| *lang == current)
+        .unwrap_or(0);
+    loop {
+        let lines = language_menu_lines(index);
+        guard.draw(&lines)?;
+        match read_key()? {
+            KeyCode::Up => index = (index + LANGUAGE_CHOICES.len() - 1) % LANGUAGE_CHOICES.len(),
+            KeyCode::Down => index = (index + 1) % LANGUAGE_CHOICES.len(),
+            KeyCode::Enter => return Ok(Some(LANGUAGE_CHOICES[index].0)),
+            KeyCode::Esc => return Ok(None),
+            KeyCode::Char('c') => return Ok(None),
+            _ => {}
+        }
+    }
+}
+
+fn language_menu_lines(index: usize) -> Vec<String> {
+    let messages = i18n::t();
+    let mut lines = Vec::with_capacity(LANGUAGE_CHOICES.len() + 2);
+    lines.push(messages.lang_menu_title.to_string());
+    for (item, (_, label)) in LANGUAGE_CHOICES.iter().enumerate() {
+        let marker = if item == index { '>' } else { ' ' };
+        lines.push(format!("{marker} {label}"));
+    }
+    lines.push(messages.lang_menu_hint.to_string());
+    lines
+}
+
+/// 只处理按下和按住。`Ctrl-C` 在这里变成 `KeyCode::Char('c')`，调用方把它当作取消。
+fn read_key() -> Result<KeyCode, Error> {
+    loop {
+        let event = match event::read() {
+            Ok(event) => event,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(Error::io("stdin", err)),
+        };
+        let Event::Key(key) = event else {
+            continue;
+        };
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            continue;
+        }
+        if key.code == KeyCode::Char('c') && !key.modifiers.contains(KeyModifiers::CONTROL) {
+            continue;
+        }
+        return Ok(key.code);
+    }
+}
+
+struct TerminalGuard {
+    lines: u16,
+    raw: bool,
+}
+
+impl TerminalGuard {
+    fn draw(&mut self, lines: &[String]) -> Result<(), Error> {
+        let mut err = io::stderr();
+        if self.lines > 0 {
+            write!(err, "\x1b[{}A", self.lines).map_err(|err| Error::io("stderr", err))?;
+        }
+        for line in lines {
+            write!(err, "\r\x1b[2K{line}\r\n").map_err(|err| Error::io("stderr", err))?;
+        }
+        err.flush().map_err(|err| Error::io("stderr", err))?;
+        self.lines = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+        Ok(())
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let mut err = io::stderr();
+        if self.lines > 0 {
+            let _ = write!(err, "\x1b[{}A\r\x1b[J", self.lines);
+        }
+        let _ = execute!(err, Show);
+        if self.raw {
+            let _ = disable_raw_mode();
+        }
+        let _ = err.flush();
+    }
+}
+
 fn confirm_delete() -> Result<bool, Error> {
     if !io::stdin().is_terminal() {
         return Err(Error::Usage(i18n::t().err_confirm_delete.into()));
@@ -871,6 +1015,17 @@ mod tests {
             cli.command,
             Some(Command::Config {
                 action: ConfigCommand::Show
+            })
+        ));
+    }
+
+    #[test]
+    fn config_lang_is_a_subcommand() {
+        let cli = Cli::try_parse_from(["cmdgen", "config", "lang"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Config {
+                action: ConfigCommand::Lang
             })
         ));
     }

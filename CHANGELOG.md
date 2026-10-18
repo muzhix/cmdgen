@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `cmdgen config lang` 用上下键选择界面语言，确认后把 `language` 写入配置文件。
 - 界面语言默认改为英文。可用 `--lang`、`CMDGEN_LANG` 或配置文件里的 `language` 在中英文之间切换。
 - README 增加 logo、发布与平台徽章，以及用真实二进制和 Zsh 集成录制的英文终端演示。
 - 提供 `install.sh`，可以用 `curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash` 安装预编译二进制。

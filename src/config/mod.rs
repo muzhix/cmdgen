@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 pub use file::{
     activate_provider, apply_parsed_language, config_dir, config_path, home_dir, init_config,
-    load_config, parse_config, provider_file_has_content, render_default_config, update_provider,
-    FileConfig, InitOutcome, ProviderProfile, ProviderUpdate, DEFAULT_CONFIG_TOML,
+    load_config, parse_config, provider_file_has_content, render_default_config, set_language,
+    update_provider, FileConfig, InitOutcome, ProviderProfile, ProviderUpdate, DEFAULT_CONFIG_TOML,
 };
 pub use secrets::{
     delete_api_key, provider_env_var, resolve_api_key, save_api_key, CredentialFile, DeletedKey,

@@ -136,6 +136,7 @@ One-shot overrides: `--provider`, `--model`, `--base-url`, `--shell`, `--timeout
 | `cmdgen config show` | Show the effective config, with the key redacted |
 | `cmdgen config providers` | List saved providers and mark the active one |
 | `cmdgen config use <name>` | Write the active provider to the config file |
+| `cmdgen config lang` | Choose the interface language and write it to the config file |
 | `cmdgen config set` | Write `--model` or `--base-url` into the config |
 | `cmdgen config set-key` | Read an API key without echoing it |
 | `cmdgen config delete-key` | Delete the current provider's saved credential |
@@ -314,6 +315,8 @@ cmdgen --lang en --help
 2. `CMDGEN_LANG`
 3. `language`
 4. built-in `en`
+
+To change the saved language, run `cmdgen config lang` in a terminal. The arrow keys move between English and 中文; Enter writes `language` as `en` or `zh`. Esc cancels and leaves the file unchanged. Without a terminal, the command exits with an error and does not write the file. `--lang` and `CMDGEN_LANG` still apply only to the current run.
 
 Ctrl+G invokes cmdgen without `--lang`, so the shortcut path uses `language` from the config file. `cmdgen config init` writes `language`: the value of `--lang` or `CMDGEN_LANG` when one of those is set, otherwise `en`. An unknown language code is reported in English, with the supported codes listed.
 

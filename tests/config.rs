@@ -2,9 +2,10 @@ mod common;
 
 use cmdgen::config::{
     activate_provider, delete_api_key, load_effective, merge, parse_config, resolve_api_key,
-    save_api_key, update_provider, CredentialFile, EnvMap, FileConfig, MemoryStore, Overrides,
-    SavedKey, SecretStore, DEFAULT_CONFIG_TOML,
+    save_api_key, set_language, update_provider, CredentialFile, EnvMap, FileConfig, MemoryStore,
+    Overrides, SavedKey, SecretStore, DEFAULT_CONFIG_TOML,
 };
+use cmdgen::i18n::Lang;
 use cmdgen::shell::detect::resolve_shell;
 
 struct UnavailableStore;
@@ -611,6 +612,85 @@ base_url = "https://example.com/v1"
         .unwrap_err()
         .to_string()
         .contains("base_url"));
+}
+
+#[test]
+fn set_language_rewrites_the_code_and_keeps_comments() {
+    let sandbox = common::Sandbox::new();
+    let path = sandbox.config_dir().join("config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"# 保留这段说明
+language = "en"
+active = "deepseek"
+
+[providers.deepseek]
+base_url = "https://api.deepseek.com"
+model = "deepseek-flash"
+"#;
+    std::fs::write(&path, original).unwrap();
+    set_language(&path, Lang::Zh).unwrap();
+    let updated = std::fs::read_to_string(&path).unwrap();
+    assert!(updated.contains("# 保留这段说明"));
+    assert!(updated.contains("language = \"zh\""));
+    assert!(!updated.contains("language = \"en\""));
+    assert!(updated.contains("active = \"deepseek\""));
+    assert!(updated.contains("https://api.deepseek.com"));
+    cmdgen::i18n::reset_language();
+}
+
+#[test]
+fn set_language_inserts_a_missing_key_and_canonicalizes_aliases() {
+    let sandbox = common::Sandbox::new();
+    let path = sandbox.config_dir().join("config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"# 保留
+active = "deepseek"
+
+[providers.deepseek]
+base_url = "https://api.deepseek.com"
+model = "deepseek-flash"
+"#;
+    std::fs::write(&path, original).unwrap();
+    set_language(&path, Lang::Zh).unwrap();
+    let updated = std::fs::read_to_string(&path).unwrap();
+    assert!(updated.contains("# 保留"));
+    assert!(updated.contains("language = \"zh\""));
+    assert!(updated.contains("active = \"deepseek\""));
+
+    std::fs::write(&path, "language = \"zh-CN\"\n").unwrap();
+    set_language(&path, Lang::Zh).unwrap();
+    let updated = std::fs::read_to_string(&path).unwrap();
+    assert!(updated.contains("language = \"zh\""));
+    assert!(!updated.contains("zh-CN"));
+
+    std::fs::write(&path, "language = \"en-US\"\n").unwrap();
+    set_language(&path, Lang::En).unwrap();
+    let updated = std::fs::read_to_string(&path).unwrap();
+    assert!(updated.contains("language = \"en\""));
+    assert!(!updated.contains("en-US"));
+    cmdgen::i18n::reset_language();
+}
+
+#[test]
+fn set_language_leaves_an_identical_canonical_code_untouched() {
+    let sandbox = common::Sandbox::new();
+    let path = sandbox.config_dir().join("config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "# keep\nlanguage = \"en\"\n";
+    std::fs::write(&path, original).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    set_language(&path, Lang::En).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    cmdgen::i18n::reset_language();
+}
+
+#[test]
+fn set_language_does_not_create_a_missing_file() {
+    let sandbox = common::Sandbox::new();
+    let path = sandbox.config_dir().join("config.toml");
+    let err = set_language(&path, Lang::Zh).unwrap_err();
+    assert!(matches!(err, cmdgen::Error::ConfigNotFound { .. }));
+    assert!(!path.exists());
 }
 
 #[test]

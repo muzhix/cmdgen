@@ -215,6 +215,46 @@ pub fn validate_config(file: &FileConfig, path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// 把根表的 `language` 写成规范码 `en` 或 `zh`。只改这一项，保留注释和其余配置。
+/// 文件里已经是这个规范码时不改内容。
+pub fn set_language(path: &Path, lang: Lang) -> Result<(), Error> {
+    if !path.exists() {
+        return Err(Error::ConfigNotFound {
+            path: path.display().to_string(),
+        });
+    }
+    let text = fsutil::read_to_string(path)?;
+    let file = parse_config(&text, path)?;
+    if trimmed(&file.language) == Some(lang.as_str()) {
+        return Ok(());
+    }
+    let mut doc = text
+        .parse::<DocumentMut>()
+        .map_err(|err| Error::invalid(path, err.to_string()))?;
+    set_language_key(&mut doc, lang.as_str()).map_err(|reason| Error::invalid(path, reason))?;
+    let updated = doc.to_string();
+    parse_config(&updated, path)?;
+    fsutil::atomic_write(path, &updated, 0o600)?;
+    Ok(())
+}
+
+fn set_language_key(doc: &mut DocumentMut, code: &str) -> Result<(), String> {
+    match doc.get_mut("language") {
+        Some(Item::Value(value)) => {
+            let decor = value.decor().clone();
+            let mut updated = Value::from(code);
+            *updated.decor_mut() = decor;
+            *value = updated;
+            Ok(())
+        }
+        Some(_) => Err(i18n::t().err_language_must_be_string.into()),
+        None => {
+            doc.insert("language", toml_edit::value(code));
+            Ok(())
+        }
+    }
+}
+
 /// 把 `active` 写成 `name`。只改这一项，保留注释和其余配置。
 pub fn activate_provider(path: &Path, name: &str) -> Result<String, Error> {
     if !path.exists() {
