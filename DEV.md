@@ -48,7 +48,7 @@ cargo build --release
 python3 docs/demo/record.py
 ```
 
-需要 `zsh`、`ffmpeg`，以及 Python 包 `pillow`、`pyte`、`fonttools`。系统里要有 JetBrains Mono、Noto Sans CJK 和 DejaVu。
+画面里的描述是英文，字体是 JetBrains Mono。二进制状态行里的「正在生成」会在录制时写成 `generating`。需要 `zsh`、`ffmpeg`、Python 包 `pillow` 和 `pyte`，以及系统里的 JetBrains Mono。
 
 ## 内置模型名
 

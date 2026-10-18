@@ -21,7 +21,6 @@ import tempfile
 import termios
 import threading
 import time
-import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -33,14 +32,10 @@ DOCS = ROOT / "docs"
 BINARY = ROOT / "target" / "release" / "cmdgen"
 JB = Path("/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf")
 JB_BOLD = Path("/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Bold.ttf")
-CJK = Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")
-CJK_BOLD = Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc")
-SYMBOL = Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf")
-BRAILLE = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 
-COLS = 80
-ROWS = 18
-FONT_PX = 24
+COLS = 96
+ROWS = 16
+FONT_PX = 22
 FPS = 14
 MOCK_DELAY = 0.72
 
@@ -73,22 +68,16 @@ NAMED = {
 }
 
 RESPONSES = (
-    ("列出所有 docker 容器，包括已经停止的", "docker ps -a"),
-    ("查找当前目录下超过 100MB 的文件", "find . -type f -size +100M"),
-    ("查看最近 200 行 nginx 容器日志", "docker logs --tail 200 nginx"),
-    ("删除当前目录里的临时文件", "rm -i -- *.tmp"),
+    ("list all docker containers, including stopped ones", "docker ps -a"),
+    ("find files larger than 100MB", "find . -type f -size +100M"),
+    ("show the last 200 lines of the nginx logs", "docker logs --tail 200 nginx"),
+    ("delete temporary files in this directory", "rm -i -- *.tmp"),
 )
 
-
-def cjk_index(path: Path) -> int:
-    from fontTools.ttLib import TTCollection
-
-    collection = TTCollection(str(path))
-    for index, font in enumerate(collection.fonts):
-        name = font["name"].getDebugName(1) or ""
-        if name.endswith(" SC") or "CJK SC" in name:
-            return index
-    return 0
+# The binary's status line is Chinese. The README GIF is English, so the
+# recorder rewrites that one label while keeping the real spinner glyphs.
+STATUS_ZH = "正在生成"
+STATUS_EN = "generating"
 
 
 class MockHandler(BaseHTTPRequestHandler):
@@ -189,10 +178,10 @@ class Recorder:
     def wait(self, seconds: float) -> None:
         time.sleep(seconds)
 
-    def type_text(self, text: str, delay: float = 0.038) -> None:
+    def type_text(self, text: str, delay: float = 0.026) -> None:
         for char in text:
             self.send(char.encode())
-            self.wait(0.058 if unicodedata.east_asian_width(char) in "WF" else delay)
+            self.wait(delay)
 
 
 def screen_text(screen: pyte.Screen) -> str:
@@ -217,13 +206,37 @@ def replay(events: list[tuple[float, bytes]], start: float, end: float, cols: in
 
 def snapshot(screen: pyte.Screen):
     rows = []
+    cursor_x = screen.cursor.x
+    cursor_y = screen.cursor.y
     for y in range(screen.lines):
         row = []
         for x in range(screen.columns):
             char = screen.buffer[y][x]
             row.append((char.data, char.fg, char.bg, char.bold, char.reverse))
+        row, shift, status_end = rewrite_status(row)
         rows.append(row)
-    return rows, (screen.cursor.x, screen.cursor.y, screen.cursor.hidden)
+        if y == cursor_y and cursor_x >= status_end:
+            cursor_x += shift
+    return rows, (min(cursor_x, screen.columns - 1), cursor_y, screen.cursor.hidden)
+
+
+def rewrite_status(row: list) -> tuple[list, int, int]:
+    text = "".join(data for data, *_rest in row if data)
+    if STATUS_ZH not in text:
+        return row, 0, 0
+    start = next(index for index, cell in enumerate(row) if cell[0] == STATUS_ZH[0])
+    seen = 0
+    end = start
+    while end < len(row) and seen < len(STATUS_ZH):
+        if row[end][0]:
+            seen += 1
+        end += 1
+    style = row[start][1:]
+    updated = list(row)
+    for offset, char in enumerate(STATUS_EN):
+        if start + offset < len(updated):
+            updated[start + offset] = (char, *style)
+    return updated, len(STATUS_EN) - (end - start), end
 
 
 def used_rows(frames) -> int:
@@ -264,48 +277,21 @@ def parse_color(value: str, default: tuple[int, int, int]) -> tuple[int, int, in
     return default
 
 
-def cmap_of(path: Path, index: int = 0) -> set[int]:
-    from fontTools.ttLib import TTFont
-
-    font = TTFont(str(path), fontNumber=index)
-    return set((font.getBestCmap() or {}))
-
-
 class Renderer:
+    """Draw the terminal in JetBrains Mono so the GIF reads as code."""
+
     def __init__(self) -> None:
-        index = cjk_index(CJK)
         self.latin = ImageFont.truetype(str(JB), FONT_PX)
         self.latin_bold = ImageFont.truetype(str(JB_BOLD), FONT_PX)
         self.cell_w = max(1, round(self.latin.getlength("M")))
-        target = self.cell_w * 2
-        cjk_px = FONT_PX
-        trial = ImageFont.truetype(str(CJK), cjk_px, index=index)
-        while trial.getlength("测") < target - 0.4 and cjk_px < FONT_PX * 2:
-            cjk_px += 1
-            trial = ImageFont.truetype(str(CJK), cjk_px, index=index)
-        self.cjk = trial
-        self.cjk_bold = ImageFont.truetype(str(CJK_BOLD), cjk_px, index=index)
-        self.symbol = ImageFont.truetype(str(SYMBOL), FONT_PX)
-        self.braille = ImageFont.truetype(str(BRAILLE), FONT_PX)
-        self.title_font = ImageFont.truetype(str(JB), 16)
-        self.latin_cmap = cmap_of(JB)
-        self.symbol_cmap = cmap_of(SYMBOL)
-        self.braille_cmap = cmap_of(BRAILLE)
+        self.title_font = ImageFont.truetype(str(JB), 15)
         ascent, descent = self.latin.getmetrics()
-        cjk_box = self.cjk.getbbox("测")
-        self.cell_h = max(ascent + descent, cjk_box[3] - cjk_box[1]) + 8
+        self.cell_h = ascent + descent + 4
+        self.baseline = 2 + ascent
 
     def font_for(self, char: str, bold: bool):
-        code = ord(char[0])
-        if unicodedata.east_asian_width(char[0]) in "WF":
-            return self.cjk_bold if bold else self.cjk
-        if 0x2800 <= code <= 0x28FF and code in self.braille_cmap:
-            return self.braille
-        if code in self.latin_cmap:
-            return self.latin_bold if bold else self.latin
-        if code in self.symbol_cmap:
-            return self.symbol
-        return self.cjk
+        del char
+        return self.latin_bold if bold else self.latin
 
     def render(self, frame, title: str, rows: int, cols: int) -> Image.Image:
         cells, (cursor_x, cursor_y, cursor_hidden) = frame
@@ -351,13 +337,13 @@ class Renderer:
                         self.draw_braille(draw, px, py, fg_c, code)
                     else:
                         font = self.font_for(data, bold)
-                        bbox = font.getbbox(data)
-                        glyph_w = bbox[2] - bbox[0]
-                        glyph_h = bbox[3] - bbox[1]
-                        cell_span = span * self.cell_w
-                        gx = px + (cell_span - glyph_w) / 2 - bbox[0]
-                        gy = py + (self.cell_h - glyph_h) / 2 - bbox[1]
-                        draw.text((gx, gy), data, font=font, fill=fg_c)
+                        draw.text(
+                            (px, py + self.baseline),
+                            data,
+                            font=font,
+                            fill=fg_c,
+                            anchor="ls",
+                        )
                 x += span
         if not cursor_hidden and cursor_y < rows and cursor_x < cols:
             bar_x = pad_x + cursor_x * self.cell_w
@@ -496,9 +482,9 @@ def record_cli(env: dict[str, str]) -> tuple[list, float, float, list]:
         start = rec.now()
         rec.wait(0.35)
         for prompt in (
-            'cmdgen "列出所有 docker 容器，包括已经停止的"',
-            'cmdgen "查找当前目录下超过 100MB 的文件"',
-            'cmdgen "查看最近 200 行 nginx 容器日志"',
+            'cmdgen "list all docker containers, including stopped ones"',
+            'cmdgen "find files larger than 100MB"',
+            'cmdgen "show the last 200 lines of the nginx logs"',
         ):
             rec.type_text(prompt)
             rec.wait(0.18)
@@ -513,10 +499,18 @@ def record_cli(env: dict[str, str]) -> tuple[list, float, float, list]:
     text = "\n".join(screen_text_from_cells(frame) for frame in frames)
     assert_text(
         text,
-        ["docker ps -a", "find . -type f -size +100M", "docker logs --tail 200 nginx", "正在生成"],
+        ["docker ps -a", "find . -type f -size +100M", "docker logs --tail 200 nginx", "generating"],
         "cli",
     )
+    assert_english(text, "cli")
     return frames, start, end, events
+
+
+def assert_english(text: str, label: str) -> None:
+    allowed = set("❯⇥⚠")
+    foreign = sorted({char for char in text if ord(char) > 127 and char not in allowed and not (0x2800 <= ord(char) <= 0x28FF)})
+    if foreign or STATUS_ZH in text:
+        raise SystemExit(f"{label} is not English: {foreign!r}\n{text[-1500:]}")
 
 
 def record_shell(env: dict[str, str], home: Path) -> tuple[list, float, float]:
@@ -545,7 +539,7 @@ def record_shell(env: dict[str, str], home: Path) -> tuple[list, float, float]:
         rec.wait(0.3)
         start = rec.now()
         rec.wait(0.35)
-        rec.type_text("列出所有 docker 容器，包括已经停止的")
+        rec.type_text("list all docker containers, including stopped ones")
         rec.wait(0.25)
         rec.send(b"\x07")
         rec.wait(MOCK_DELAY + 0.85)
@@ -554,7 +548,7 @@ def record_shell(env: dict[str, str], home: Path) -> tuple[list, float, float]:
         rec.wait(1.35)
         rec.send(b"\x15")  # Ctrl+U, clear the accepted command without running it
         rec.wait(0.4)
-        rec.type_text("删除当前目录里的临时文件")
+        rec.type_text("delete temporary files in this directory")
         rec.wait(0.28)
         rec.send(b"\x07")
         rec.wait(MOCK_DELAY + 1.7)
@@ -566,7 +560,12 @@ def record_shell(env: dict[str, str], home: Path) -> tuple[list, float, float]:
         events = list(rec.events)
     frames = replay(events, start, end, COLS, ROWS)
     text = "\n".join(screen_text_from_cells(frame) for frame in frames)
-    assert_text(text, ["docker ps -a", "rm -i -- *.tmp", "列出所有 docker 容器", "⚠"], "shell")
+    assert_text(
+        text,
+        ["docker ps -a", "rm -i -- *.tmp", "list all docker containers", "⚠"],
+        "shell",
+    )
+    assert_english(text, "shell")
     return frames, start, end
 
 

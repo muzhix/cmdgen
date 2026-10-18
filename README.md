@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo-shell.gif" width="800" alt="在 Zsh 输入行写下自然语言并按 Ctrl+G。建议以灰色 ghost text 出现，Tab 接受后才进入输入行。删除类建议显示为红色并带警告标记，不会自动执行。">
+  <img src="docs/demo-shell.gif" width="928" alt="In Zsh, type a request and press Ctrl+G. The suggestion appears as gray ghost text. Tab accepts it. A destructive suggestion is shown in red with a warning and is not executed.">
 </p>
 
 `cmdgen` 把一句自然语言转成当前操作系统和 Shell 能用的命令。它是独立、轻量的 BYOK 工具：默认调用 DeepSeek，也可以改成任何 OpenAI-compatible Chat Completions 接口。
@@ -100,13 +100,13 @@ source ~/.zshrc
 ## 直接生成
 
 <p align="center">
-  <img src="docs/demo-cli.gif" width="730" alt="依次运行三条 cmdgen 命令，标准输出分别是 docker ps -a、find . -type f -size +100M 和 docker logs --tail 200 nginx。">
+  <img src="docs/demo-cli.gif" width="863" alt="Three cmdgen prompts. stdout is only docker ps -a, find . -type f -size +100M, and docker logs --tail 200 nginx.">
 </p>
 
 ```bash
-cmdgen "列出所有 docker 容器，包括已经停止的"
-cmdgen "查找当前目录下超过 100MB 的文件"
-cmdgen "查看最近 200 行 nginx 容器日志"
+cmdgen "list all docker containers, including stopped ones"
+cmdgen "find files larger than 100MB"
+cmdgen "show the last 200 lines of the nginx logs"
 ```
 
 上面动图里的命令是示例结果，实际输出由模型决定。在交互式终端里等待时，标准错误会显示转圈，结束或失败后擦掉。把标准错误重定向或接入管道时不显示，成功时标准错误仍然为空。
