@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `cmdgen config provider` 菜单最后一项可以新增 provider。依次输入名称、base_url 和 model，API Key 可以留空跳过，并且不会写入配置文件。
 - `cmdgen config provider` 取代 `config set`、`config set-key` 和 `config delete-key`。在终端里选择 provider 后编辑 model、base_url 或 API Key，改完可以继续编辑其他项。
 - `cmdgen config lang` 用上下键选择界面语言，确认后把 `language` 写入配置文件。
 - 界面语言默认改为英文。可用 `--lang`、`CMDGEN_LANG` 或配置文件里的 `language` 在中英文之间切换。

@@ -1,9 +1,11 @@
 """Run argv on a PTY. After CMDGEN_TTY_MARKER appears, write CMDGEN_TTY_KEYS (hex)."""
 
+import fcntl
 import os
 import pty
 import select
 import sys
+import termios
 
 
 def drain(master, data):
@@ -29,6 +31,10 @@ def main():
     pid = os.fork()
     if pid == 0:
         os.setsid()
+        try:
+            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        except OSError:
+            pass
         os.dup2(slave, 0)
         os.dup2(slave, 1)
         os.dup2(slave, 2)

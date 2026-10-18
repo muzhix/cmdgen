@@ -1,9 +1,9 @@
 mod common;
 
 use cmdgen::config::{
-    activate_provider, delete_api_key, load_effective, merge, parse_config, resolve_api_key,
-    save_api_key, set_language, update_provider, CredentialFile, EnvMap, FileConfig, MemoryStore,
-    Overrides, SavedKey, SecretStore, DEFAULT_CONFIG_TOML,
+    activate_provider, create_provider, delete_api_key, load_effective, merge, parse_config,
+    resolve_api_key, save_api_key, set_language, update_provider, CredentialFile, EnvMap,
+    FileConfig, MemoryStore, Overrides, SavedKey, SecretStore, DEFAULT_CONFIG_TOML,
 };
 use cmdgen::i18n::Lang;
 use cmdgen::shell::detect::resolve_shell;
@@ -867,6 +867,82 @@ fn set_rejects_an_invalid_url_without_writing() {
     let err = update_provider(&path, Some("deepseek"), None, Some("   ")).unwrap_err();
     assert!(err.to_string().contains("must not be empty"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+}
+
+#[test]
+fn create_provider_writes_both_fields_and_keeps_active() {
+    let sandbox = common::Sandbox::new();
+    let path = sandbox.config_dir().join("config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "# keep\nactive = \"deepseek\"\n\n[providers.deepseek]\nbase_url = \"https://api.deepseek.com\"\nmodel = \"deepseek-flash\"\n";
+    std::fs::write(&path, original).unwrap();
+
+    let created = create_provider(
+        &path,
+        "OpenAI",
+        "https://api.openai.com/v1/",
+        " gpt-4o-mini ",
+    )
+    .unwrap();
+    assert_eq!(created.name, "openai");
+    assert_eq!(
+        created.base_url.as_deref(),
+        Some("https://api.openai.com/v1")
+    );
+    assert_eq!(created.model.as_deref(), Some("gpt-4o-mini"));
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("# keep"));
+    assert!(text.contains("active = \"deepseek\""));
+    assert!(text.contains("[providers.openai]"));
+    assert!(text.contains("https://api.openai.com/v1"));
+    assert!(text.contains("model = \"gpt-4o-mini\""));
+    assert!(text.contains("https://api.deepseek.com"));
+
+    let before_duplicate = text;
+    let err = create_provider(&path, "openai", "https://example.com/v1", "other").unwrap_err();
+    assert!(err.to_string().contains("already exists"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before_duplicate);
+}
+
+#[test]
+fn create_provider_sets_active_when_it_is_missing() {
+    let sandbox = common::Sandbox::new();
+    let path = sandbox.config_dir().join("config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "# keep\n[generation]\ntemperature = 0.0\n").unwrap();
+
+    create_provider(&path, "openai", "https://api.openai.com/v1", "gpt-4o-mini").unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("# keep"));
+    assert!(text.contains("active = \"openai\""));
+    assert!(text.contains("[providers.openai]"));
+    assert!(text.contains("base_url = \"https://api.openai.com/v1\""));
+    assert!(text.contains("model = \"gpt-4o-mini\""));
+}
+
+#[test]
+fn create_provider_rejects_invalid_url_and_legacy_file_without_writing() {
+    let sandbox = common::Sandbox::new();
+    let path = sandbox.config_dir().join("config.toml");
+    let err =
+        create_provider(&path, "openai", "https://api.openai.com/v1", "gpt-4o-mini").unwrap_err();
+    assert!(matches!(err, cmdgen::Error::ConfigNotFound { .. }));
+
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, DEFAULT_CONFIG_TOML).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+    let err = create_provider(&path, "openai", "http://example.com/v1", "custom").unwrap_err();
+    assert!(err.to_string().contains("HTTPS"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+    let legacy =
+        "[provider]\nname = \"example\"\nbase_url = \"https://example.com/v1\"\nmodel = \"custom\"\n";
+    std::fs::write(&path, legacy).unwrap();
+    let err =
+        create_provider(&path, "openai", "https://api.openai.com/v1", "gpt-4o-mini").unwrap_err();
+    assert!(err.to_string().contains("[providers.<name>]"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
 }
 
 #[test]

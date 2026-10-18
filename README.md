@@ -88,7 +88,7 @@ cmdgen config provider
 cmdgen "list every docker container, including stopped ones"
 ```
 
-`config provider` opens a menu. Choose a provider, then choose API key; the key is not echoed. When the system credential store is available, the key is saved under the service name `cmdgen` with that provider name as the account. macOS uses the login keychain. Linux uses Secret Service. When the credential store is unavailable, it writes `credentials.toml` in the same directory (mode `0600`). The key remains after you close the terminal. Other processes of the same user can read that file. Containers and CI should inject `CMDGEN_API_KEY` on each start and not depend on this file. The command needs a terminal and does not take the key as an argument.
+`config provider` opens a menu. Choose a provider, then choose API key; the key is not echoed. The last item adds a provider. When the system credential store is available, the key is saved under the service name `cmdgen` with that provider name as the account. macOS uses the login keychain. Linux uses Secret Service. When the credential store is unavailable, it writes `credentials.toml` in the same directory (mode `0600`). The key remains after you close the terminal. Other processes of the same user can read that file. Containers and CI should inject `CMDGEN_API_KEY` on each start and not depend on this file. The command needs a terminal and does not take the key as an argument.
 
 On success, standard output is only the command, for example `docker ps -a`.
 
@@ -137,13 +137,13 @@ One-shot overrides: `--provider`, `--model`, `--base-url`, `--shell`, `--timeout
 | `cmdgen config providers` | List saved providers and mark the active one |
 | `cmdgen config use <name>` | Write the active provider to the config file |
 | `cmdgen config lang` | Choose the interface language and write it to the config file |
-| `cmdgen config provider` | Choose a provider and edit its model, base URL, or API key |
+| `cmdgen config provider` | Choose a provider to edit its model, base URL, or API key, or add a provider |
 | `cmdgen shell install zsh\|bash` | Install input-line integration |
 | `cmdgen shell uninstall [zsh\|bash]` | Remove the integration cmdgen manages |
 | `cmdgen doctor` | Check config, key source, network, and integration |
 | `cmdgen --version` / `--help` | Version and help |
 
-`config provider` edits one saved provider, or the `deepseek` / `bailian` preset if it is not in the file yet. Arrow keys move, Enter confirms, and Esc goes back. After one field is saved you return to the field list. It does not change `active`; `config use` does that. `config providers` only lists names. `CMDGEN_MODEL` and `CMDGEN_BASE_URL` are not written. Without a terminal the command exits and leaves the files unchanged.
+`config provider` edits one saved provider, or the `deepseek` / `bailian` preset if it is not in the file yet. The last item adds a provider: enter a name, base URL, and model. An empty line before those fields are saved cancels and leaves the file unchanged. A name already on the menu, including a preset that is not in the file yet, is rejected. The API key prompt is hidden; press Enter to skip it. The key is not written to the config file. Arrow keys move, Enter confirms, and Esc goes back. After one field is saved you return to the field list. Adding or editing a provider does not change an existing `active`; `config use` does that. If the file has no `active`, the new name is written as `active`. `config providers` only lists names. `CMDGEN_MODEL` and `CMDGEN_BASE_URL` are not written. Without a terminal the command exits and leaves the files unchanged.
 
 A one-shot switch does not edit the file: `cmdgen --provider bailian "list large files"`. Options such as `--provider` go after `config`; if they come first, `config` is treated as the description.
 
@@ -232,7 +232,7 @@ In `config provider`, choose bailian and then API key. `config use` writes `acti
 
 `api_key_env` is an environment variable name, not a secret. The Bailian preset uses the shared North China 2 (Beijing) endpoint and does not include a workspace id. To change the saved address, choose base URL in `cmdgen config provider`. For one run only, still use `--base-url`.
 
-A legacy `[provider]` table can still be read; it cannot appear together with `[providers]`. `config provider` refuses to edit a file that only has that table. Other OpenAI-compatible services are written as `[providers.<name>]` with both `base_url` and `model`; the menu then lists that name.
+A legacy `[provider]` table can still be read; it cannot appear together with `[providers]`. `config provider` refuses to edit a file that only has that table. Other OpenAI-compatible services can be added from the last item in `cmdgen config provider`. They are written as `[providers.<name>]` with both `base_url` and `model`; the menu then lists that name.
 
 `deepseek-flash` is not a permanent model name. If the vendor changes it, update `model` in the config. DeepSeek enables thinking mode by default; when the provider is `deepseek`, cmdgen sends `thinking.type=disabled` so the response is a command.
 

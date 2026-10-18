@@ -355,6 +355,58 @@ pub fn update_provider(
     })
 }
 
+/// 新建 `[providers.<name>]`，同时写入 `base_url` 和 `model`。
+///
+/// 名称已存在时拒绝，并且不改文件。文件没有 `active` 时，同一次写入把它设成该名称；已有 `active` 时保持不变。
+pub fn create_provider(
+    path: &Path,
+    name: &str,
+    base_url: &str,
+    model: &str,
+) -> Result<ProviderUpdate, Error> {
+    if !path.exists() {
+        return Err(Error::ConfigNotFound {
+            path: path.display().to_string(),
+        });
+    }
+    let text = fsutil::read_to_string(path)?;
+    let file = parse_config(&text, path)?;
+    if provider_file_has_content(&file.provider) && file.providers.is_empty() {
+        return Err(Error::invalid(path, i18n::t().err_legacy_only_edit));
+    }
+    let name = normalize_in_file(name, path)?;
+    let exists = file
+        .providers
+        .keys()
+        .any(|key| super::normalize_provider(key).ok().as_deref() == Some(name.as_str()));
+    if exists {
+        return Err(Error::invalid(
+            path,
+            fill(i18n::t().err_provider_exists, &[("name", &name)]),
+        ));
+    }
+    let base_url = canonical_base_url(base_url)?;
+    let model = canonical_model(path, model)?;
+    let assign_active = trimmed(&file.active).is_none();
+
+    let mut doc = text
+        .parse::<DocumentMut>()
+        .map_err(|err| Error::invalid(path, err.to_string()))?;
+    write_profile_fields(&mut doc, &name, Some(&base_url), Some(&model))
+        .map_err(|reason| Error::invalid(path, reason))?;
+    if assign_active {
+        set_active(&mut doc, &name).map_err(|reason| Error::invalid(path, reason))?;
+    }
+    let updated = doc.to_string();
+    parse_config(&updated, path)?;
+    fsutil::atomic_write(path, &updated, 0o600)?;
+    Ok(ProviderUpdate {
+        name,
+        base_url: Some(base_url),
+        model: Some(model),
+    })
+}
+
 fn canonical_base_url(value: &str) -> Result<String, Error> {
     let trimmed = value.trim().trim_end_matches('/');
     crate::generator::client::completions_endpoint(trimmed)?;

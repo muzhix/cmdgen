@@ -13,11 +13,11 @@ use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use crate::config::{
-    activate_provider, config_dir, config_path, delete_api_key, home_dir, init_config,
-    key_status_from, load_config, load_effective, normalize_provider, provider_file_has_content,
-    render_providers, resolve_api_key, save_api_key, set_language, update_provider, CredentialFile,
-    EnvMap, FileConfig, InitOutcome, KeyringStore, Overrides, SavedKey, BAILIAN_BASE_URL,
-    BAILIAN_MODEL, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
+    activate_provider, config_dir, config_path, create_provider, delete_api_key, home_dir,
+    init_config, key_status_from, load_config, load_effective, normalize_provider,
+    provider_file_has_content, render_providers, resolve_api_key, save_api_key, set_language,
+    update_provider, CredentialFile, EnvMap, FileConfig, InitOutcome, KeyringStore, Overrides,
+    SavedKey, BAILIAN_BASE_URL, BAILIAN_MODEL, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
 };
 use crate::doctor;
 use crate::error::Error;
@@ -117,7 +117,7 @@ enum ConfigCommand {
     },
     /// Choose the interface language with the arrow keys and write it to the config file
     Lang,
-    /// Edit one provider's model, base URL, or API key. `config providers` only lists them
+    /// Edit one provider's model, base URL, or API key, or add a provider. `config providers` only lists them
     Provider,
 }
 
@@ -769,7 +769,7 @@ fn config_provider(env: &EnvMap) -> Result<i32, Error> {
         let file = load_config(&path)?;
         let rows = provider_rows(&file);
         let active = trimmed_active(&file);
-        let labels: Vec<String> = rows
+        let mut labels: Vec<String> = rows
             .iter()
             .map(|row| {
                 if active.as_deref() == Some(row.name.as_str()) {
@@ -779,6 +779,7 @@ fn config_provider(env: &EnvMap) -> Result<i32, Error> {
                 }
             })
             .collect();
+        labels.push(i18n::t().provider_add.to_string());
         let default = active
             .as_ref()
             .and_then(|name| rows.iter().position(|row| row.name == *name))
@@ -786,8 +787,103 @@ fn config_provider(env: &EnvMap) -> Result<i32, Error> {
         let Some(index) = select_index(i18n::t().provider_menu_title, &labels, default)? else {
             return Ok(0);
         };
-        edit_provider_fields(env, &path, &rows[index].name)?;
+        if index == rows.len() {
+            add_provider(env, &path)?;
+        } else {
+            edit_provider_fields(env, &path, &rows[index].name)?;
+        }
     }
+}
+
+fn add_provider(env: &EnvMap, path: &std::path::Path) -> Result<(), Error> {
+    let file = load_config(path)?;
+    let rows = provider_rows(&file);
+    let had_active = trimmed_active(&file).is_some();
+    let name = loop {
+        let Some(raw) = prompt_line(i18n::t().prompt_provider_name)? else {
+            return Ok(());
+        };
+        match normalize_provider(&raw) {
+            Ok(name) if rows.iter().any(|row| row.name == name) => {
+                eprintln!(
+                    "cmdgen: {}",
+                    fill(i18n::t().err_provider_exists, &[("name", &name)])
+                );
+            }
+            Ok(name) => break name,
+            Err(err) => eprintln!("cmdgen: {err}"),
+        }
+    };
+    let Some(base_url) = prompt_new_base_url()? else {
+        return Ok(());
+    };
+    let Some(model) = prompt_line(i18n::t().prompt_model)? else {
+        return Ok(());
+    };
+    match create_provider(path, &name, &base_url, &model) {
+        Ok(update) => {
+            print_provider_update(&path.display().to_string(), &update);
+            if had_active {
+                println!(
+                    "{}",
+                    fill(i18n::t().added_provider_hint, &[("name", &update.name)])
+                );
+            } else {
+                println!(
+                    "{}",
+                    fill(i18n::t().switched_provider, &[("name", &update.name)])
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("cmdgen: {err}");
+            return Ok(());
+        }
+    }
+    prompt_optional_api_key(env, &name)
+}
+
+fn prompt_new_base_url() -> Result<Option<String>, Error> {
+    loop {
+        let Some(raw) = prompt_line(i18n::t().prompt_base_url)? else {
+            return Ok(None);
+        };
+        match completions_endpoint(&raw) {
+            Ok(endpoint) => {
+                let base = endpoint
+                    .trim_end_matches("/chat/completions")
+                    .trim_end_matches('/')
+                    .to_string();
+                return Ok(Some(base));
+            }
+            Err(err) => eprintln!("cmdgen: {err}"),
+        }
+    }
+}
+
+fn prompt_optional_api_key(env: &EnvMap, name: &str) -> Result<(), Error> {
+    let secret = match rpassword::prompt_password(i18n::t().prompt_api_key_optional) {
+        Ok(secret) => secret,
+        Err(_) => {
+            eprintln!("cmdgen: {}", i18n::t().err_hidden_input);
+            return Ok(());
+        }
+    };
+    if secret.trim().is_empty() {
+        return Ok(());
+    }
+    let file = match CredentialFile::from_env(env) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("cmdgen: {err}");
+            return Ok(());
+        }
+    };
+    match save_api_key(name, &secret, &KeyringStore, &file) {
+        Ok(saved) => print_saved_key(name, saved),
+        Err(err) => eprintln!("cmdgen: {err}"),
+    }
+    Ok(())
 }
 
 fn ensure_provider_editable(path: &std::path::Path) -> Result<(), Error> {

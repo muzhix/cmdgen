@@ -88,7 +88,7 @@ cmdgen config provider
 cmdgen "列出所有 docker 容器，包括已经停止的"
 ```
 
-`config provider` 会打开菜单。选中 provider 后再选 API Key，输入不会回显。系统凭据存储可用时，Key 保存到服务名 `cmdgen`、账号为该 provider 名称的条目。macOS 使用登录钥匙串；Linux 使用 Secret Service。凭据存储不可用时，写入同目录的 `credentials.toml`（权限 `0600`）。关掉终端后再打开仍然有效。同一用户下的其他进程可以读取该文件。容器和 CI 请在每次启动时注入 `CMDGEN_API_KEY`，不要依赖这个文件。这个命令需要终端，也不接受把 Key 写在参数里。
+`config provider` 会打开菜单。选中 provider 后再选 API Key，输入不会回显。最后一项用来新增 provider。系统凭据存储可用时，Key 保存到服务名 `cmdgen`、账号为该 provider 名称的条目。macOS 使用登录钥匙串；Linux 使用 Secret Service。凭据存储不可用时，写入同目录的 `credentials.toml`（权限 `0600`）。关掉终端后再打开仍然有效。同一用户下的其他进程可以读取该文件。容器和 CI 请在每次启动时注入 `CMDGEN_API_KEY`，不要依赖这个文件。这个命令需要终端，也不接受把 Key 写在参数里。
 
 成功时标准输出只有命令，例如 `docker ps -a`。
 
@@ -136,13 +136,13 @@ cmdgen -- "-n 列出当前目录"
 | `cmdgen config show` | 显示有效配置，Key 脱敏 |
 | `cmdgen config providers` | 列出已保存的 provider，并标出当前项 |
 | `cmdgen config use <name>` | 把当前 provider 写入配置文件 |
-| `cmdgen config provider` | 选择一个 provider，编辑它的 model、base_url 或 API Key |
+| `cmdgen config provider` | 选择一个 provider，编辑它的 model、base_url 或 API Key，或新增一个 provider |
 | `cmdgen shell install zsh\|bash` | 安装输入行集成 |
 | `cmdgen shell uninstall [zsh\|bash]` | 删除 cmdgen 管理的集成 |
 | `cmdgen doctor` | 检查配置、Key 来源、网络和集成 |
 | `cmdgen --version` / `--help` | 版本和帮助 |
 
-`config provider` 编辑一个已保存的 provider，或尚未写入文件的预设 `deepseek` / `bailian`。上下键移动，Enter 确认，Esc 返回。改完一项会回到属性列表。它不修改 `active`，切换当前项用 `config use`。`config providers` 只列出名单。`CMDGEN_MODEL` 和 `CMDGEN_BASE_URL` 不会被写入。没有终端时命令会退出，并且不改文件。
+`config provider` 编辑一个已保存的 provider，或尚未写入文件的预设 `deepseek` / `bailian`。最后一项用来新增：依次输入名称、base_url 和 model。这三项保存之前按空行会取消，并且不改文件。菜单里已经有的名称会被拒绝，包括尚未写入文件的预设。API Key 的输入不会回显，直接回车则跳过。Key 不会写入配置文件。上下键移动，Enter 确认，Esc 返回。改完一项会回到属性列表。新增或编辑都不修改已有的 `active`，切换当前项用 `config use`。文件里没有 `active` 时，新名称会被写成 `active`。`config providers` 只列出名单。`CMDGEN_MODEL` 和 `CMDGEN_BASE_URL` 不会被写入。没有终端时命令会退出，并且不改文件。
 
 单次切换不改文件：`cmdgen --provider bailian "列出大文件"`。`--provider` 等选项要写在 `config` 之后；写在前面时，`config` 会被当成描述。
 
@@ -231,7 +231,7 @@ cmdgen config use bailian
 
 `api_key_env` 只写环境变量名，不写密钥。百炼预设使用华北 2（北京）的共用域名，不包含业务空间 ID。若要改保存的地址，在 `cmdgen config provider` 里选择 base_url。只想改这一次时，仍用 `--base-url`。
 
-旧的 `[provider]` 表仍然可以读取；它和 `[providers]` 不能同时出现。只有这张旧表时，`config provider` 会拒绝编辑。其他 OpenAI 兼容服务写成带 `base_url` 和 `model` 的 `[providers.<name>]`，菜单里就会出现这个名称。
+旧的 `[provider]` 表仍然可以读取；它和 `[providers]` 不能同时出现。只有这张旧表时，`config provider` 会拒绝编辑。其他 OpenAI 兼容服务可以从 `cmdgen config provider` 的最后一项新增，写成同时带 `base_url` 和 `model` 的 `[providers.<name>]`，菜单里就会出现这个名称。
 
 `deepseek-flash` 不是永久有效的模型名。如果官方更换，请修改配置里的 `model`。DeepSeek 默认开启思考模式，cmdgen 在 provider 为 `deepseek` 时发送 `thinking.type=disabled`，以便直接返回命令。
 

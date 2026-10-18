@@ -571,6 +571,71 @@ fn config_provider_arrow_menu_updates_the_model() {
     assert!(!updated.contains("model = \"deepseek-flash\""));
 }
 
+#[test]
+fn config_provider_arrow_menu_adds_a_provider() {
+    let sandbox = common::Sandbox::new();
+    sandbox
+        .command()
+        .args(["config", "init"])
+        .assert()
+        .success();
+    let path = sandbox.config_dir().join("config.toml");
+    // Down from the current provider, Enter on "Add provider", then name, URL,
+    // model, an empty API key line, and Esc back to exit.
+    let output = tty_menu(
+        &sandbox,
+        "1b5b420d6f70656e61690a68747470733a2f2f6170692e6f70656e61692e636f6d2f76310a6770742d346f2d6d696e690a0a1b",
+        &["config", "provider"],
+    );
+    let visible = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "status={:?}\nvisible={visible}",
+        output.status
+    );
+    assert!(visible.contains("updated provider: openai"), "{visible}");
+    assert!(
+        visible.contains("base_url: https://api.openai.com/v1"),
+        "{visible}"
+    );
+    assert!(visible.contains("model: gpt-4o-mini"), "{visible}");
+    assert!(visible.contains("cmdgen config use openai"), "{visible}");
+    common::assert_no_secret(&visible, "sk-menu-not-shown");
+    let updated = fs::read_to_string(&path).unwrap();
+    common::assert_no_secret(&updated, "sk-menu-not-shown");
+    assert!(updated.contains("[providers.openai]"), "{updated}");
+    assert!(
+        updated.contains("base_url = \"https://api.openai.com/v1\""),
+        "{updated}"
+    );
+    assert!(updated.contains("model = \"gpt-4o-mini\""), "{updated}");
+    assert!(updated.contains("active = \"deepseek\"") || updated.contains("active = 'deepseek'"));
+    assert!(updated.contains("https://api.deepseek.com"));
+    assert!(updated.contains("qwen3.8-flash"));
+}
+
+#[test]
+fn config_provider_add_cancel_on_empty_name_does_not_write() {
+    let sandbox = common::Sandbox::new();
+    sandbox
+        .command()
+        .args(["config", "init"])
+        .assert()
+        .success();
+    let path = sandbox.config_dir().join("config.toml");
+    let original = fs::read_to_string(&path).unwrap();
+    // Down, Enter on "Add provider", empty name, then Esc out of the menu.
+    let output = tty_menu(&sandbox, "1b5b420d0a1b", &["config", "provider"]);
+    let visible = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "status={:?}\nvisible={visible}",
+        output.status
+    );
+    assert!(!visible.contains("updated provider"), "{visible}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
 fn tty_menu(sandbox: &common::Sandbox, keys_hex: &str, args: &[&str]) -> std::process::Output {
     let mut cmd = assert_cmd::Command::new("python3");
     cmd.arg("-c")
