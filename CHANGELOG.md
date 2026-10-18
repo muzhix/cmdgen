@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 界面语言默认改为英文。可用 `--lang`、`CMDGEN_LANG` 或配置文件里的 `language` 在中英文之间切换。
+- README 增加 logo、发布与平台徽章，以及用真实二进制和 Zsh 集成录制的英文终端演示。
 - 提供 `install.sh`，可以用 `curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash` 安装预编译二进制。
 - 配置文件可以保存多家 OpenAI 兼容 provider，并用 `cmdgen config use` 或 `--provider` 切换。
 - 内置预设为 DeepSeek 和阿里云百炼，默认启用 DeepSeek。

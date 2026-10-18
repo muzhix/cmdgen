@@ -39,6 +39,7 @@ impl Sandbox {
             "CMDGEN_PROVIDER",
             "CMDGEN_SHELL",
             "CMDGEN_TIMEOUT",
+            "CMDGEN_LANG",
             "CMDGEN_DEBUG",
         ] {
             cmd.env_remove(key);

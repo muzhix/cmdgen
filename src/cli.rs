@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::config::{
     activate_provider, config_dir, config_path, delete_api_key, home_dir, init_config,
@@ -18,12 +18,9 @@ use crate::generator::client::{
 };
 use crate::generator::output::normalize_command;
 use crate::generator::prompt::{system_prompt, user_message};
+use crate::i18n::{self, fill, Lang};
 use crate::shell::detect::{os_label, resolve_shell};
 use crate::shell::integration::{install, uninstall, IntegrationShell};
-
-const SECRET_ARG_ERROR: &str = "\
-config set-key 不接受命令行参数，以免 API Key 写入 Shell 历史。\
-请运行 `cmdgen config set-key`，再在隐藏提示中输入。";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -31,10 +28,10 @@ config set-key 不接受命令行参数，以免 API Key 写入 Shell 历史。\
     version,
     about = "cmdgen — AI-powered shell command generation for your terminal.",
     after_long_help = "\
-cmdgen 只把命令打印到标准输出，或在 Shell 集成中填回输入行。它不会执行生成的命令。
+cmdgen prints the command to stdout, or inserts it into the shell input line. It does not run the generated command.
 
-选项需要写在描述之前。描述以 - 开头时，请使用: cmdgen -- \"-n 列出文件\"
-要让 config、doctor、shell 这类词作为描述，请使用: cmdgen -- shell",
+Put options before the description. If the description starts with -, use: cmdgen -- \"-n list files\"
+To use words such as config, doctor, or shell as the description, use: cmdgen -- shell",
     subcommand_negates_reqs = true,
     args_conflicts_with_subcommands = true
 )]
@@ -42,7 +39,7 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// 用自然语言描述你想执行的操作
+    /// Natural-language description of what you want to run
     #[arg(
         value_name = "PROMPT",
         required = true,
@@ -52,67 +49,71 @@ struct Cli {
     )]
     prompt: Vec<String>,
 
-    /// 覆盖 provider 名称
+    /// Override the provider name
     #[arg(long, global = true)]
     provider: Option<String>,
 
-    /// 覆盖模型 ID
+    /// Override the model ID
     #[arg(long, global = true)]
     model: Option<String>,
 
-    /// 覆盖 API 前缀，不要包含 /chat/completions
+    /// Override the API prefix. Do not include /chat/completions
     #[arg(long, global = true, value_name = "URL")]
     base_url: Option<String>,
 
-    /// 覆盖目标 shell，例如 zsh 或 bash
+    /// Override the target shell, for example zsh or bash
     #[arg(long, global = true, id = "shell_override")]
     shell: Option<String>,
 
-    /// 覆盖请求超时（秒）
+    /// Override the request timeout (seconds)
     #[arg(long, global = true, value_name = "SECS")]
     timeout: Option<u64>,
 
-    /// 向 stderr 输出模型、接口和耗时，不包含 API Key 或完整 prompt
+    /// Print the model, endpoint, and elapsed time to stderr. Does not include the API key or the full prompt
     #[arg(long, global = true)]
     verbose: bool,
+
+    /// Interface language for this run: en or zh. Does not write the config file
+    #[arg(long, global = true, value_name = "CODE")]
+    lang: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// 管理配置文件与 API Key
+    /// Manage the config file and API key
     Config {
         #[command(subcommand)]
         action: ConfigCommand,
     },
-    /// 安装或卸载 Shell 输入行集成
+    /// Install or uninstall shell input-line integration
     Shell {
         #[command(subcommand)]
         action: IntegrationCommand,
     },
-    /// 检查配置、凭据来源、网络和集成状态
+    /// Check config, credential source, network, and integration status
     Doctor,
 }
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
-    /// 创建默认配置文件
+    /// Create the default config file
     Init,
-    /// 显示有效配置（API Key 脱敏）
+    /// Show the effective config (API key redacted)
     Show,
-    /// 列出已配置的 provider，并标出当前项
+    /// List configured providers and mark the active one
     Providers,
-    /// 切换当前 provider，并写入配置文件的 active
+    /// Switch the active provider and write it to active in the config file
     Use {
-        /// 已配置的 provider 名称，或预设 deepseek / bailian
+        /// Configured provider name, or the deepseek / bailian preset
         name: String,
     },
-    /// 把 --model 或 --base-url 写入配置文件。省略 --provider 时修改当前 active
+    /// Write --model or --base-url to the config file. With no --provider, update the current active provider
     Set,
-    /// 隐藏输入 API Key。优先保存到系统凭据存储；不可用时写入本地凭据文件
+    /// Read an API key without echoing it. Prefer the system credential store; otherwise write the local credential file
     SetKey,
-    /// 删除当前 provider 在系统凭据存储和本地凭据文件中的 API Key
+    /// Delete the current provider's API key from the system credential store and the local credential file
     DeleteKey {
-        /// 跳过确认提示
+        /// Skip the confirmation prompt
         #[arg(long)]
         yes: bool,
     },
@@ -120,12 +121,12 @@ enum ConfigCommand {
 
 #[derive(Debug, Subcommand)]
 enum IntegrationCommand {
-    /// 安装输入行集成
+    /// Install input-line integration
     Install {
         #[arg(value_enum)]
         shell: ShellArg,
     },
-    /// 卸载集成；省略 shell 时同时卸载 zsh 和 bash
+    /// Uninstall integration. With no shell, uninstall both zsh and bash
     Uninstall {
         #[arg(value_enum)]
         shell: Option<ShellArg>,
@@ -153,14 +154,205 @@ where
     T: Into<OsString> + Clone,
 {
     let raw: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    prepare_language(&raw)?;
     reject_inline_secret(&raw)?;
-    match Cli::try_parse_from(raw) {
+    let cmd = localized_command();
+    let matches = match cmd.try_get_matches_from(raw) {
+        Ok(matches) => matches,
+        Err(err) => return Ok(handle_clap_error(err)),
+    };
+    match Cli::from_arg_matches(&matches) {
         Ok(cli) => execute(cli),
-        Err(err) => {
-            let code = err.exit_code();
-            let _ = err.print();
-            Ok(code)
+        Err(err) => Ok(handle_clap_error(err)),
+    }
+}
+
+fn prepare_language(args: &[OsString]) -> Result<(), Error> {
+    i18n::reset_language();
+    if let Some(code) = flag_value(args, "--lang") {
+        let lang = i18n::parse_lang_code(&code)
+            .map_err(|_| Error::Usage(i18n::unknown_language_message(&code)))?;
+        i18n::set_explicit(lang);
+        return Ok(());
+    }
+    if let Ok(code) = std::env::var("CMDGEN_LANG") {
+        let code = code.trim();
+        if !code.is_empty() {
+            let lang = i18n::parse_lang_code(code)
+                .map_err(|_| Error::Usage(i18n::unknown_language_message(code)))?;
+            i18n::set_explicit(lang);
+            return Ok(());
         }
+    }
+    if requests_help(args) {
+        let env = EnvMap::from_process();
+        if let Some(lang) = crate::config::peek_language(&env) {
+            i18n::set_current(lang);
+        }
+    }
+    Ok(())
+}
+
+fn requests_help(args: &[OsString]) -> bool {
+    for arg in args.iter().skip(1) {
+        let text = arg.to_string_lossy();
+        if text == "--" {
+            break;
+        }
+        if text == "--help" || text == "-h" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Last `--lang` / `--lang=CODE` before `--`. `None` when the flag is absent or has no value.
+fn flag_value(args: &[OsString], flag: &str) -> Option<String> {
+    let mut found = None;
+    let mut index = 1;
+    let with_eq = format!("{flag}=");
+    while index < args.len() {
+        let text = args[index].to_string_lossy();
+        if text == "--" {
+            break;
+        }
+        if let Some(value) = text.strip_prefix(&with_eq) {
+            found = Some(value.to_string());
+            index += 1;
+            continue;
+        }
+        if text == flag {
+            let next = args.get(index + 1).map(|value| value.to_string_lossy());
+            if next.as_deref().is_some_and(|value| value != "--") {
+                found = next.map(|value| value.into_owned());
+                index += 2;
+                continue;
+            }
+            return None;
+        }
+        index += 1;
+    }
+    found
+}
+
+fn localized_command() -> clap::Command {
+    let m = i18n::t();
+    let mut cmd = Cli::command()
+        .about(m.about)
+        .after_long_help(m.after_long_help);
+    cmd = set_arg_help(cmd, "prompt", m.help_prompt);
+    cmd = set_arg_help(cmd, "provider", m.help_provider);
+    cmd = set_arg_help(cmd, "model", m.help_model);
+    cmd = set_arg_help(cmd, "base_url", m.help_base_url);
+    cmd = set_arg_help(cmd, "shell_override", m.help_shell);
+    cmd = set_arg_help(cmd, "timeout", m.help_timeout);
+    cmd = set_arg_help(cmd, "verbose", m.help_verbose);
+    cmd = set_arg_help(cmd, "lang", m.help_lang);
+    cmd = cmd.mut_subcommand("config", |config| {
+        let config = config.about(m.help_config);
+        let config = set_about(config, "init", m.help_config_init);
+        let config = set_about(config, "show", m.help_config_show);
+        let config = set_about(config, "providers", m.help_config_providers);
+        let config = set_about(config, "use", m.help_config_use);
+        let config = set_about(config, "set", m.help_config_set);
+        let config = set_about(config, "set-key", m.help_config_set_key);
+        let config = set_about(config, "delete-key", m.help_config_delete_key);
+        let config = config.mut_subcommand("use", |use_cmd| {
+            set_arg_help(use_cmd, "name", m.help_config_use_name)
+        });
+        config.mut_subcommand("delete-key", |delete| {
+            set_arg_help(delete, "yes", m.help_delete_key_yes)
+        })
+    });
+    cmd.mut_subcommand("shell", |shell| {
+        let shell = shell.about(m.help_shell_cmd);
+        let shell = set_about(shell, "install", m.help_install);
+        set_about(shell, "uninstall", m.help_uninstall)
+    })
+    .mut_subcommand("doctor", |doctor| doctor.about(m.help_doctor))
+}
+
+fn set_arg_help(cmd: clap::Command, id: &str, help: &'static str) -> clap::Command {
+    if cmd.get_arguments().any(|arg| arg.get_id().as_str() == id) {
+        cmd.mut_arg(id, |arg| arg.help(help))
+    } else {
+        cmd
+    }
+}
+
+fn set_about(cmd: clap::Command, name: &str, about: &'static str) -> clap::Command {
+    if cmd.find_subcommand(name).is_none() {
+        return cmd;
+    }
+    cmd.mut_subcommand(name, |sub| sub.about(about))
+}
+
+fn handle_clap_error(err: clap::Error) -> i32 {
+    use clap::error::ErrorKind;
+    match err.kind() {
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+            let _ = err.print();
+            err.exit_code()
+        }
+        ErrorKind::MissingRequiredArgument
+        | ErrorKind::MissingSubcommand
+        | ErrorKind::UnknownArgument
+        | ErrorKind::InvalidValue
+        | ErrorKind::InvalidSubcommand
+        | ErrorKind::ValueValidation => {
+            eprintln!("cmdgen: {}", localize_clap_error(&err));
+            err.exit_code()
+        }
+        _ => {
+            let _ = err.print();
+            err.exit_code()
+        }
+    }
+}
+
+fn localize_clap_error(err: &clap::Error) -> String {
+    use clap::error::{ContextKind, ErrorKind};
+    let m = i18n::t();
+    let arg = context_text(err, ContextKind::InvalidArg)
+        .or_else(|| context_text(err, ContextKind::InvalidSubcommand))
+        .unwrap_or_else(|| "argument".into());
+    let head = match err.kind() {
+        ErrorKind::MissingRequiredArgument | ErrorKind::MissingSubcommand => {
+            fill(m.err_missing_arg, &[("arg", &arg)])
+        }
+        ErrorKind::UnknownArgument => fill(m.err_unknown_arg, &[("arg", &arg)]),
+        ErrorKind::InvalidValue | ErrorKind::InvalidSubcommand | ErrorKind::ValueValidation => {
+            let value = context_text(err, ContextKind::InvalidValue).unwrap_or_default();
+            let mut text = fill(m.err_invalid_value, &[("value", &value), ("arg", &arg)]);
+            if let Some(values) = context_text(err, ContextKind::ValidValue) {
+                text.push('\n');
+                text.push_str(&fill(m.err_supported_values, &[("values", &values)]));
+            }
+            text
+        }
+        _ => err.to_string(),
+    };
+    if let Some(usage) = context_text(err, ContextKind::Usage) {
+        format!("{head}\n\n{usage}")
+    } else {
+        head
+    }
+}
+
+fn context_text(err: &clap::Error, kind: clap::error::ContextKind) -> Option<String> {
+    use clap::error::ContextValue;
+    match err.get(kind)? {
+        ContextValue::String(value) => Some(value.clone()),
+        ContextValue::Strings(values) => Some(values.join(", ")),
+        ContextValue::StyledStr(value) => Some(value.to_string()),
+        ContextValue::StyledStrs(values) => Some(
+            values
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        _ => None,
     }
 }
 
@@ -174,6 +366,7 @@ fn execute(cli: Cli) -> Result<i32, Error> {
         shell,
         timeout,
         verbose,
+        lang: _,
     } = cli;
     let overrides = Overrides {
         provider,
@@ -193,9 +386,7 @@ fn execute(cli: Cli) -> Result<i32, Error> {
 fn generate(prompt: &[String], overrides: &Overrides, verbose: bool) -> Result<i32, Error> {
     let prompt = prompt.join(" ");
     if prompt.trim().is_empty() {
-        return Err(Error::Usage(
-            "请提供自然语言描述。示例: cmdgen \"列出所有 docker 容器\"".into(),
-        ));
+        return Err(Error::Usage(i18n::t().err_need_prompt.into()));
     }
 
     let mut env = EnvMap::from_process();
@@ -216,8 +407,14 @@ fn generate(prompt: &[String], overrides: &Overrides, verbose: bool) -> Result<i
         &CredentialFile::from_env(&env)?,
     )?;
     if verbose {
-        eprintln!("模型: {}", config.model);
-        eprintln!("接口: {endpoint}");
+        eprintln!(
+            "{}",
+            fill(i18n::t().verbose_model, &[("model", &config.model)])
+        );
+        eprintln!(
+            "{}",
+            fill(i18n::t().verbose_endpoint, &[("endpoint", &endpoint)])
+        );
     }
 
     let cwd = if config.include_cwd {
@@ -236,7 +433,7 @@ fn generate(prompt: &[String], overrides: &Overrides, verbose: bool) -> Result<i
         disable_thinking: config.provider_name == "deepseek",
     });
     let started = Instant::now();
-    let result = with_loading("正在生成", || {
+    let result = with_loading(i18n::t().loading, || {
         complete(&CompletionRequest {
             endpoint: &endpoint,
             api_key: &key.secret,
@@ -245,7 +442,13 @@ fn generate(prompt: &[String], overrides: &Overrides, verbose: bool) -> Result<i
         })
     });
     if verbose {
-        eprintln!("耗时: {} ms", started.elapsed().as_millis());
+        eprintln!(
+            "{}",
+            fill(
+                i18n::t().verbose_elapsed,
+                &[("ms", &started.elapsed().as_millis().to_string())]
+            )
+        );
     }
     let command = normalize_command(&result?)?;
     println!("{command}");
@@ -257,15 +460,35 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
     match action {
         ConfigCommand::Init => {
             let path = crate::config::config_path(&env)?;
-            match init_config(&path)? {
+            let write_lang = if i18n::is_explicit() {
+                i18n::current()
+            } else {
+                Lang::En
+            };
+            match init_config(&path, write_lang)? {
                 InitOutcome::Created(path) => {
-                    println!("已创建配置文件: {}", path.display());
                     println!(
-                        "API Key 不会写入该文件。请运行 `cmdgen config set-key` 或设置环境变量。"
+                        "{}",
+                        fill(
+                            i18n::t().config_created,
+                            &[("path", &path.display().to_string())]
+                        )
                     );
+                    println!("{}", i18n::t().config_created_hint);
                 }
                 InitOutcome::AlreadyExists(path) => {
-                    println!("配置文件已存在，未修改: {}", path.display());
+                    if !i18n::is_explicit() {
+                        if let Some(lang) = crate::config::peek_language(&env) {
+                            i18n::set_current(lang);
+                        }
+                    }
+                    println!(
+                        "{}",
+                        fill(
+                            i18n::t().config_exists,
+                            &[("path", &path.display().to_string())]
+                        )
+                    );
                 }
             }
             Ok(0)
@@ -300,14 +523,22 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
             let path = config_path(&env)?;
             match activate_provider(&path, &name) {
                 Ok(active) => {
-                    println!("已切换到 provider: {active}");
-                    println!("配置文件: {}", path.display());
+                    println!(
+                        "{}",
+                        fill(i18n::t().switched_provider, &[("name", &active)])
+                    );
+                    println!(
+                        "{}",
+                        fill(
+                            i18n::t().config_path_line,
+                            &[("path", &path.display().to_string())]
+                        )
+                    );
                     Ok(0)
                 }
-                Err(Error::ConfigNotFound { .. }) => Err(Error::Usage(
-                    "找不到配置文件。请先运行 `cmdgen config init`，或自行创建 [providers.<name>]。"
-                        .into(),
-                )),
+                Err(Error::ConfigNotFound { .. }) => {
+                    Err(Error::Usage(i18n::t().err_no_config.into()))
+                }
                 Err(err) => Err(err),
             }
         }
@@ -320,49 +551,58 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
                 overrides.model.as_deref(),
             ) {
                 Ok(update) => {
-                    println!("已更新 provider: {}", update.name);
+                    println!(
+                        "{}",
+                        fill(i18n::t().updated_provider, &[("name", &update.name)])
+                    );
                     if let Some(url) = &update.base_url {
-                        println!("base_url: {url}");
+                        println!("{}", fill(i18n::t().line_base_url, &[("url", url)]));
                     }
                     if let Some(model) = &update.model {
-                        println!("model: {model}");
+                        println!("{}", fill(i18n::t().line_model, &[("model", model)]));
                     }
-                    println!("配置文件: {}", path.display());
+                    println!(
+                        "{}",
+                        fill(
+                            i18n::t().config_path_line,
+                            &[("path", &path.display().to_string())]
+                        )
+                    );
                     Ok(0)
                 }
-                Err(Error::ConfigNotFound { .. }) => Err(Error::Usage(
-                    "找不到配置文件。请先运行 `cmdgen config init`，或自行创建 [providers.<name>]。"
-                        .into(),
-                )),
+                Err(Error::ConfigNotFound { .. }) => {
+                    Err(Error::Usage(i18n::t().err_no_config.into()))
+                }
                 Err(err) => Err(err),
             }
         }
         ConfigCommand::SetKey => {
             let config = load_effective(&env, overrides)?;
-            let secret = rpassword::prompt_password("API Key（输入不可见）: ").map_err(|_| {
-                Error::Usage(
-                    "无法隐藏读取 API Key。请在交互式终端中运行 `cmdgen config set-key`。".into(),
-                )
-            })?;
+            let secret = rpassword::prompt_password(i18n::t().prompt_api_key)
+                .map_err(|_| Error::Usage(i18n::t().err_hidden_input.into()))?;
             let file = CredentialFile::from_env(&env)?;
             match save_api_key(&config.provider_name, &secret, &KeyringStore, &file)? {
                 SavedKey::Keyring { removed_file_entry } => {
                     println!(
-                        "已保存到系统凭据存储（服务 cmdgen，账号 {}）。未写入配置文件。",
-                        config.provider_name
+                        "{}",
+                        fill(
+                            i18n::t().saved_keyring,
+                            &[("account", &config.provider_name)]
+                        )
                     );
                     if removed_file_entry {
-                        println!("已删除本地凭据文件中该 provider 的旧 Key。");
+                        println!("{}", i18n::t().removed_file_key);
                     }
                 }
                 SavedKey::File { path } => {
                     println!(
-                        "系统凭据存储不可用，已保存到本地凭据文件: {}",
-                        path.display()
+                        "{}",
+                        fill(
+                            i18n::t().saved_file,
+                            &[("path", &path.display().to_string())]
+                        )
                     );
-                    println!(
-                        "文件权限为 0600。同一用户下的其他进程可以读取该文件。未写入 config.toml。"
-                    );
+                    println!("{}", i18n::t().saved_file_mode);
                 }
             }
             Ok(0)
@@ -370,23 +610,33 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
         ConfigCommand::DeleteKey { yes } => {
             let config = load_effective(&env, overrides)?;
             if !yes && !confirm_delete()? {
-                println!("已取消，未删除。");
+                println!("{}", i18n::t().cancelled);
                 return Ok(0);
             }
             let file = CredentialFile::from_env(&env)?;
             let deleted = delete_api_key(&config.provider_name, &KeyringStore, &file)?;
             match (deleted.keyring, deleted.file) {
                 (true, true) => println!(
-                    "已删除系统凭据存储和本地凭据文件中的 API Key（账号 {}）。",
-                    config.provider_name
+                    "{}",
+                    fill(
+                        i18n::t().deleted_both,
+                        &[("account", &config.provider_name)]
+                    )
                 ),
                 (true, false) => println!(
-                    "已删除系统凭据存储中的 API Key（服务 cmdgen，账号 {}）。",
-                    config.provider_name
+                    "{}",
+                    fill(
+                        i18n::t().deleted_keyring,
+                        &[("account", &config.provider_name)]
+                    )
                 ),
-                (false, true) => {
-                    println!("已删除本地凭据文件中的 API Key: {}", file.path().display())
-                }
+                (false, true) => println!(
+                    "{}",
+                    fill(
+                        i18n::t().deleted_file,
+                        &[("path", &file.path().display().to_string())]
+                    )
+                ),
                 (false, false) => unreachable!("任一侧未删除时 delete_api_key 会返回错误"),
             }
             Ok(0)
@@ -403,36 +653,62 @@ fn integration_command(overrides: &Overrides, action: IntegrationCommand) -> Res
         IntegrationCommand::Install { shell } => {
             let shell = IntegrationShell::from(shell);
             let report = install(shell, &home, &dir, &config.keybinding)?;
+            let shell_name = display_shell(shell);
             if report.changed {
-                println!("已安装 {} 集成。", display_shell(shell));
+                println!("{}", fill(i18n::t().installed, &[("shell", shell_name)]));
             } else {
-                println!("{} 集成已存在，未重复修改。", display_shell(shell));
-            }
-            println!("脚本: {}", report.script_path.display());
-            println!("配置: {}", report.rc_path.display());
-            println!("快捷键: {}", report.display_binding);
-            if report.created_backup {
                 println!(
-                    "备份: {}",
-                    report
-                        .rc_path
-                        .with_file_name(format!(
-                            "{}.cmdgen.bak",
-                            report
-                                .rc_path
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| "rc".into())
-                        ))
-                        .display()
+                    "{}",
+                    fill(i18n::t().install_unchanged, &[("shell", shell_name)])
                 );
             }
-            println!("请运行: {}", report.reload);
+            println!(
+                "{}",
+                fill(
+                    i18n::t().line_script,
+                    &[("path", &report.script_path.display().to_string())]
+                )
+            );
+            println!(
+                "{}",
+                fill(
+                    i18n::t().line_rc,
+                    &[("path", &report.rc_path.display().to_string())]
+                )
+            );
+            println!(
+                "{}",
+                fill(
+                    i18n::t().line_binding,
+                    &[("binding", &report.display_binding)]
+                )
+            );
+            if report.created_backup {
+                let backup = report.rc_path.with_file_name(format!(
+                    "{}.cmdgen.bak",
+                    report
+                        .rc_path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "rc".into())
+                ));
+                println!(
+                    "{}",
+                    fill(
+                        i18n::t().line_backup,
+                        &[("path", &backup.display().to_string())]
+                    )
+                );
+            }
+            println!(
+                "{}",
+                fill(i18n::t().line_run, &[("command", &report.reload)])
+            );
             if let Some(warning) = report.binding_warning {
-                eprintln!("警告: {warning}");
+                eprintln!("{}", fill(i18n::t().line_warning, &[("message", &warning)]));
             }
             if shell == IntegrationShell::Bash {
-                eprintln!("提示: Bash 输入行集成需要 Bash 4 或更高版本。macOS 自带的 Bash 3.2 不支持 bind -x。");
+                eprintln!("{}", i18n::t().bash_hint);
             }
             Ok(0)
         }
@@ -441,19 +717,30 @@ fn integration_command(overrides: &Overrides, action: IntegrationCommand) -> Res
                 shell.into_iter().map(IntegrationShell::from).collect();
             let reports = uninstall(&shells, &home, &dir)?;
             for report in reports {
+                let shell_name = display_shell(report.shell);
                 if report.removed_block || report.removed_script {
-                    println!("已卸载 {} 集成。", display_shell(report.shell));
+                    println!("{}", fill(i18n::t().uninstalled, &[("shell", shell_name)]));
                 } else {
-                    println!("未发现 {} 集成，无需卸载。", display_shell(report.shell));
+                    println!(
+                        "{}",
+                        fill(i18n::t().uninstall_absent, &[("shell", shell_name)])
+                    );
                 }
                 if report.removed_block {
                     println!(
-                        "请运行: source ~/{}",
-                        report
-                            .rc_path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
+                        "{}",
+                        fill(
+                            i18n::t().line_source,
+                            &[(
+                                "name",
+                                &report
+                                    .rc_path
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .into_owned(),
+                            )]
+                        )
                     );
                 }
             }
@@ -515,11 +802,9 @@ fn display_shell(shell: IntegrationShell) -> &'static str {
 
 fn confirm_delete() -> Result<bool, Error> {
     if !io::stdin().is_terminal() {
-        return Err(Error::Usage(
-            "删除凭据需要确认。请在终端中运行，或加上 --yes。".into(),
-        ));
+        return Err(Error::Usage(i18n::t().err_confirm_delete.into()));
     }
-    eprint!("将删除当前 provider 在系统凭据存储和本地凭据文件中的 API Key。输入 yes 确认: ");
+    eprint!("{}", i18n::t().prompt_confirm_delete);
     let _ = io::stderr().flush();
     let mut line = String::new();
     io::stdin()
@@ -535,6 +820,7 @@ fn reject_inline_secret(args: &[OsString]) -> Result<(), Error> {
         "--base-url",
         "--shell",
         "--timeout",
+        "--lang",
     ];
     let mut positionals = Vec::new();
     let mut index = 1;
@@ -544,7 +830,7 @@ fn reject_inline_secret(args: &[OsString]) -> Result<(), Error> {
             if positionals.last().map(String::as_str) == Some("set-key")
                 && positionals.iter().rev().nth(1).map(String::as_str) == Some("config")
             {
-                return Err(Error::Usage(SECRET_ARG_ERROR.into()));
+                return Err(Error::Usage(i18n::t().secret_arg.into()));
             }
             break;
         }
@@ -566,7 +852,7 @@ fn reject_inline_secret(args: &[OsString]) -> Result<(), Error> {
             && positionals[positionals.len() - 3] == "config"
             && positionals[positionals.len() - 2] == "set-key"
         {
-            return Err(Error::Usage(SECRET_ARG_ERROR.into()));
+            return Err(Error::Usage(i18n::t().secret_arg.into()));
         }
         index += 1;
     }

@@ -4,9 +4,9 @@ pub mod secrets;
 use std::path::PathBuf;
 
 pub use file::{
-    activate_provider, config_dir, config_path, home_dir, init_config, load_config, parse_config,
-    provider_file_has_content, update_provider, FileConfig, InitOutcome, ProviderProfile,
-    ProviderUpdate, DEFAULT_CONFIG_TOML,
+    activate_provider, apply_parsed_language, config_dir, config_path, home_dir, init_config,
+    load_config, parse_config, provider_file_has_content, render_default_config, update_provider,
+    FileConfig, InitOutcome, ProviderProfile, ProviderUpdate, DEFAULT_CONFIG_TOML,
 };
 pub use secrets::{
     delete_api_key, provider_env_var, resolve_api_key, save_api_key, CredentialFile, DeletedKey,
@@ -14,6 +14,7 @@ pub use secrets::{
 };
 
 use crate::error::Error;
+use crate::i18n::{self, fill};
 use crate::shell::detect::resolve_shell;
 use crate::shell::integration::parse_keybinding;
 
@@ -54,6 +55,8 @@ pub struct EffectiveConfig {
     pub shell_default: String,
     pub keybinding: String,
     pub include_cwd: bool,
+    /// Resolved interface language: flag, then env, then config, then `en`.
+    pub language: String,
     pub config_path: PathBuf,
     pub config_exists: bool,
 }
@@ -62,6 +65,15 @@ pub struct EffectiveConfig {
 pub struct KeyStatus {
     pub configured: bool,
     pub source_label: String,
+}
+
+/// Best-effort read of `language` for `--help`. Missing, unreadable, or invalid files yield `None`.
+pub fn peek_language(env: &EnvMap) -> Option<crate::i18n::Lang> {
+    let path = config_path(env).ok()?;
+    let text = crate::fsutil::read_to_string(&path).ok()?;
+    let file: FileConfig = toml::from_str(&text).ok()?;
+    let raw = file::trimmed(&file.language)?;
+    crate::i18n::parse_lang_code(raw).ok()
 }
 
 pub fn load_effective(env: &EnvMap, overrides: &Overrides) -> Result<EffectiveConfig, Error> {
@@ -81,24 +93,19 @@ pub fn merge(
     env: &EnvMap,
     overrides: &Overrides,
 ) -> Result<EffectiveConfig, Error> {
+    file::apply_parsed_language(&file, &path)?;
     file::validate_config(&file, &path)?;
     let selected = select_provider(&file, &path, env, overrides)?;
     let configured_providers = catalog_providers(&file)?;
 
     let temperature = file.generation.temperature.unwrap_or(0.0);
     if !(0.0..=2.0).contains(&temperature) {
-        return Err(Error::invalid(
-            &path,
-            "generation.temperature 必须在 0 到 2 之间",
-        ));
+        return Err(Error::invalid(&path, i18n::t().err_temperature));
     }
 
     let max_tokens = file.generation.max_tokens.unwrap_or(256);
     if !(1..=8192).contains(&max_tokens) {
-        return Err(Error::invalid(
-            &path,
-            "generation.max_tokens 必须在 1 到 8192 之间",
-        ));
+        return Err(Error::invalid(&path, i18n::t().err_max_tokens));
     }
 
     let timeout_secs = if let Some(value) = overrides.timeout_secs {
@@ -109,10 +116,7 @@ pub fn merge(
         file.generation.timeout_secs.unwrap_or(20)
     };
     if !(1..=600).contains(&timeout_secs) {
-        return Err(Error::invalid(
-            &path,
-            "generation.timeout_secs 必须在 1 到 600 之间",
-        ));
+        return Err(Error::invalid(&path, i18n::t().err_timeout_range));
     }
 
     let shell_default = file.shell.default.unwrap_or_else(|| "auto".to_string());
@@ -138,24 +142,26 @@ pub fn merge(
         shell_default,
         keybinding,
         include_cwd: file.shell.include_cwd.unwrap_or(false),
+        language: i18n::current().as_str().to_string(),
         config_path: path,
         config_exists: exists,
     })
 }
 
 pub fn render_show(config: &EffectiveConfig, shell: &str, key: &KeyStatus) -> String {
+    let m = i18n::t();
     let file_state = if config.config_exists {
-        "已存在"
+        m.file_state_exists
     } else {
-        "不存在，当前使用默认值"
+        m.file_state_missing
     };
     let credentials = if key.configured {
-        format!("{}（已脱敏）", key.source_label)
+        fill(m.credentials_redacted, &[("source", &key.source_label)])
     } else {
-        "未配置".to_string()
+        m.credentials_missing.to_string()
     };
     let providers = if config.configured_providers.is_empty() {
-        "（无）".to_string()
+        m.providers_none.to_string()
     } else {
         config
             .configured_providers
@@ -164,33 +170,30 @@ pub fn render_show(config: &EffectiveConfig, shell: &str, key: &KeyStatus) -> St
             .collect::<Vec<_>>()
             .join(", ")
     };
-    format!(
-        "\
-配置文件: {path}（{file_state}）
-providers: {providers}
-provider.name: {provider}
-provider.base_url: {base_url}
-provider.model: {model}
-generation.temperature: {temperature}
-generation.max_tokens: {max_tokens}
-generation.timeout_secs: {timeout}
-shell.default: {shell_default}
-shell.resolved: {shell}
-shell.keybinding: {keybinding}
-shell.include_cwd: {include_cwd}
-credentials: {credentials}
-",
-        path = config.config_path.display(),
-        providers = providers,
-        provider = config.provider_name,
-        base_url = config.base_url,
-        model = config.model,
-        temperature = format_number(config.temperature),
-        max_tokens = config.max_tokens,
-        timeout = config.timeout_secs,
-        shell_default = config.shell_default,
-        keybinding = config.keybinding,
-        include_cwd = config.include_cwd,
+    let path = config.config_path.display().to_string();
+    let temperature = format_number(config.temperature);
+    let max_tokens = config.max_tokens.to_string();
+    let timeout = config.timeout_secs.to_string();
+    let include_cwd = config.include_cwd.to_string();
+    fill(
+        m.show_template,
+        &[
+            ("path", &path),
+            ("file_state", file_state),
+            ("language", &config.language),
+            ("providers", &providers),
+            ("provider", &config.provider_name),
+            ("base_url", &config.base_url),
+            ("model", &config.model),
+            ("temperature", &temperature),
+            ("max_tokens", &max_tokens),
+            ("timeout", &timeout),
+            ("shell_default", &config.shell_default),
+            ("shell", shell),
+            ("keybinding", &config.keybinding),
+            ("include_cwd", &include_cwd),
+            ("credentials", &credentials),
+        ],
     )
 }
 
@@ -202,15 +205,18 @@ pub fn key_status_from(result: Result<&ResolvedKey, &Error>) -> KeyStatus {
         },
         Err(Error::MissingApiKey { .. }) => KeyStatus {
             configured: false,
-            source_label: "未配置".into(),
+            source_label: i18n::t().status_unconfigured.into(),
         },
         Err(Error::CredentialStoreUnavailable { reason }) => KeyStatus {
             configured: false,
-            source_label: format!("未配置（系统凭据存储不可用: {reason}）"),
+            source_label: fill(i18n::t().status_store_unavailable, &[("reason", reason)]),
         },
         Err(err) => KeyStatus {
             configured: false,
-            source_label: format!("未配置（{err}）"),
+            source_label: fill(
+                i18n::t().status_unconfigured_detail,
+                &[("detail", &err.to_string())],
+            ),
         },
     }
 }
@@ -233,9 +239,10 @@ fn first_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Opt
 }
 
 pub fn render_providers(config: &EffectiveConfig) -> String {
-    let mut out = format!("当前: {}\n", config.provider_name);
+    let m = i18n::t();
+    let mut out = fill(m.providers_current, &[("name", &config.provider_name)]);
     if config.configured_providers.is_empty() {
-        out.push_str("（尚未在配置文件中保存 provider）\n");
+        out.push_str(m.providers_none_saved);
     }
     let mut listed = false;
     for provider in &config.configured_providers {
@@ -253,9 +260,13 @@ pub fn render_providers(config: &EffectiveConfig) -> String {
         ));
     }
     if !listed && !config.configured_providers.is_empty() {
-        out.push_str(&format!(
-            "* {}  {}  {}  （预设或本次覆盖，未写入 [providers]）\n",
-            config.provider_name, config.base_url, config.model
+        out.push_str(&fill(
+            m.providers_preset_note,
+            &[
+                ("name", &config.provider_name),
+                ("url", &config.base_url),
+                ("model", &config.model),
+            ],
         ));
     }
     out
@@ -290,12 +301,9 @@ fn select_provider(
     let provider_name = if let Some(name) = explicit.clone() {
         name
     } else if !file.providers.is_empty() {
-        active.clone().ok_or_else(|| {
-            Error::invalid(
-                path,
-                "配置了 [providers] 但没有 active。请设置 active，或运行 `cmdgen config use <name>`。",
-            )
-        })?
+        active
+            .clone()
+            .ok_or_else(|| Error::invalid(path, i18n::t().err_providers_need_active))?
     } else if let Some(name) = active.clone() {
         name
     } else if let Some(name) = legacy_name.clone() {
@@ -441,7 +449,7 @@ pub(crate) fn normalize_provider(name: &str) -> Result<String, Error> {
     if !valid {
         return Err(Error::InvalidConfig {
             path: "provider.name".into(),
-            reason: format!("provider 名称无效: {name}"),
+            reason: fill(i18n::t().err_provider_name, &[("name", &name)]),
         });
     }
     Ok(name)
@@ -473,6 +481,9 @@ fn parse_timeout(value: &str) -> Result<u64, Error> {
         .parse::<u64>()
         .map_err(|_| Error::InvalidConfig {
             path: "CMDGEN_TIMEOUT".into(),
-            reason: format!("必须是正整数秒，收到 {value:?}"),
+            reason: fill(
+                i18n::t().err_timeout_env,
+                &[("value", &format!("{value:?}"))],
+            ),
         })
 }

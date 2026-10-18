@@ -228,12 +228,12 @@ fn api_key_priority_prefers_env_then_store_then_file() {
 
     let resolved = resolve("deepseek", &env, &store, &file).unwrap();
     assert_eq!(resolved.secret, "from-store-secret");
-    assert!(resolved.source_label.contains("系统凭据存储"));
+    assert!(resolved.source_label.contains("credential store"));
 
     let empty = MemoryStore::default();
     let resolved = resolve("deepseek", &env, &empty, &file).unwrap();
     assert_eq!(resolved.secret, "from-file-secret");
-    assert!(resolved.source_label.contains("本地凭据文件"));
+    assert!(resolved.source_label.contains("credential file"));
     assert!(!resolved.source_label.contains("from-file-secret"));
 
     let resolved = resolve("deepseek", &env, &UnavailableStore, &file).unwrap();
@@ -257,7 +257,7 @@ fn missing_key_message_mentions_file_fallback() {
         panic!("应当缺少 API Key");
     };
     let text = err.to_string();
-    assert!(text.contains("系统凭据存储当前不可用"));
+    assert!(text.contains("currently unavailable"));
     assert!(text.contains("credentials.toml"));
 }
 
@@ -337,9 +337,9 @@ fn delete_removes_store_and_file_entries() {
     assert!(deleted.keyring && !deleted.file);
 
     let err = delete_api_key("deepseek", &MemoryStore::default(), &file).unwrap_err();
-    assert!(err.to_string().contains("没有可删除"));
+    assert!(err.to_string().contains("no API key to delete"));
     let err = delete_api_key("deepseek", &UnavailableStore, &file).unwrap_err();
-    assert!(err.to_string().contains("系统凭据存储当前不可用"));
+    assert!(err.to_string().contains("currently unavailable"));
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn empty_api_key_is_rejected_before_writing_a_file() {
     let sandbox = common::Sandbox::new();
     let file = credential_file(&sandbox);
     let err = save_api_key("deepseek", "  ", &MemoryStore::default(), &file).unwrap_err();
-    assert!(err.to_string().contains("不能为空"));
+    assert!(err.to_string().contains("must not be empty"));
     assert!(!file.path().exists());
 }
 
@@ -369,15 +369,21 @@ fn show_output_redacts_the_key() {
     let config = load_effective(&env_with_home(&sandbox), &Overrides::default()).unwrap();
     let status = cmdgen::config::KeyStatus {
         configured: true,
-        source_label: "环境变量 CMDGEN_API_KEY".into(),
+        source_label: "environment variable CMDGEN_API_KEY".into(),
     };
     let rendered = cmdgen::config::render_show(&config, "zsh", &status);
     assert!(rendered.contains("deepseek-flash"));
-    assert!(rendered.contains("已脱敏"));
+    assert!(rendered.contains("redacted"));
+    assert!(rendered.contains("language: en"));
     assert!(!rendered.contains("sk-test-not-real"));
     let file = FileConfig::default();
     assert!(file.provider.model.is_none());
-    assert!(rendered.contains("providers: （无）"));
+    assert!(rendered.contains("providers: (none)"));
+
+    cmdgen::i18n::set_current(cmdgen::i18n::Lang::Zh);
+    let rendered = cmdgen::config::render_show(&config, "zsh", &status);
+    assert!(rendered.contains("已脱敏"));
+    cmdgen::i18n::reset_language();
 }
 
 #[test]
@@ -584,7 +590,7 @@ model = "deepseek-flash"
     assert!(parse_config(mixed, path)
         .unwrap_err()
         .to_string()
-        .contains("不能同时使用"));
+        .contains("cannot use both"));
 
     let missing_active = r#"
 [providers.bailian]
@@ -637,10 +643,10 @@ temperature = 0.0
     assert!(!updated.contains("active = \"deepseek\""));
 
     let err = activate_provider(&path, "missing").unwrap_err();
-    assert!(err.to_string().contains("未知的 provider"));
+    assert!(err.to_string().contains("unknown provider"));
 
     let err = activate_provider(&path, "openai").unwrap_err();
-    assert!(err.to_string().contains("未知的 provider"));
+    assert!(err.to_string().contains("unknown provider"));
 }
 
 #[test]
@@ -747,7 +753,7 @@ fn set_requires_both_fields_when_creating_a_custom_provider() {
     let before = std::fs::read_to_string(&path).unwrap();
 
     let err = update_provider(&path, Some("example"), None, Some("custom")).unwrap_err();
-    assert!(err.to_string().contains("同时给出"));
+    assert!(err.to_string().contains("both"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
 
     let updated = update_provider(
@@ -779,7 +785,7 @@ fn set_rejects_an_invalid_url_without_writing() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
 
     let err = update_provider(&path, Some("deepseek"), None, Some("   ")).unwrap_err();
-    assert!(err.to_string().contains("不能为空"));
+    assert!(err.to_string().contains("must not be empty"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
 }
 

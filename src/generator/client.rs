@@ -4,6 +4,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::error::{redact, Error};
+use crate::i18n;
 
 const MAX_BODY_BYTES: u64 = 1_048_576;
 
@@ -27,30 +28,30 @@ pub fn completions_endpoint(base_url: &str) -> Result<String, Error> {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
         return Err(Error::InvalidBaseUrl {
-            reason: "地址不能为空，也不能包含空白。".into(),
+            reason: i18n::t().base_empty.into(),
         });
     }
     if trimmed.contains('?') || trimmed.contains('#') {
         return Err(Error::InvalidBaseUrl {
-            reason: "base_url 只应是 API 前缀，不能包含查询参数或片段。".into(),
+            reason: i18n::t().base_query.into(),
         });
     }
     let lower = trimmed.to_ascii_lowercase();
     if lower.contains("/chat/completions") {
         return Err(Error::InvalidBaseUrl {
-            reason: "base_url 不应包含 /chat/completions，cmdgen 会自行拼接。".into(),
+            reason: i18n::t().base_completions.into(),
         });
     }
     let https = lower.starts_with("https://");
     let loopback_http = lower.starts_with("http://") && is_loopback_http(trimmed);
     if !https && !loopback_http {
         return Err(Error::InvalidBaseUrl {
-            reason: "非本机地址必须使用 HTTPS。仅 127.0.0.1 和 localhost 允许 HTTP。".into(),
+            reason: i18n::t().base_https.into(),
         });
     }
     if https && trimmed.len() <= "https://".len() {
         return Err(Error::InvalidBaseUrl {
-            reason: "缺少主机名。".into(),
+            reason: i18n::t().base_host.into(),
         });
     }
     Ok(format!("{trimmed}/chat/completions"))
@@ -109,7 +110,7 @@ pub fn interpret_http(status: u16, body: &str, secret: &str) -> Result<String, E
             });
         }
         Err(_) => {
-            return Err(Error::InvalidResponse("响应不是有效的 JSON。".into()));
+            return Err(Error::InvalidResponse(i18n::t().resp_not_json.into()));
         }
     };
 
@@ -134,9 +135,7 @@ pub fn interpret_http(status: u16, body: &str, secret: &str) -> Result<String, E
     match content {
         Some(Value::String(text)) if text.trim().is_empty() => {
             if has_reasoning(&value) {
-                Err(Error::InvalidResponse(
-                    "模型只返回了推理内容，没有命令。请重试。".into(),
-                ))
+                Err(Error::InvalidResponse(i18n::t().resp_reasoning.into()))
             } else {
                 Err(Error::EmptyCommand)
             }
@@ -144,18 +143,14 @@ pub fn interpret_http(status: u16, body: &str, secret: &str) -> Result<String, E
         Some(Value::String(text)) => Ok(text.clone()),
         Some(Value::Null) | None => {
             if has_reasoning(&value) {
-                Err(Error::InvalidResponse(
-                    "模型只返回了推理内容，没有命令。请重试。".into(),
-                ))
+                Err(Error::InvalidResponse(i18n::t().resp_reasoning.into()))
             } else {
                 Err(Error::InvalidResponse(
-                    "响应中缺少 choices[0].message.content。".into(),
+                    i18n::t().resp_missing_content.into(),
                 ))
             }
         }
-        Some(_) => Err(Error::InvalidResponse(
-            "choices[0].message.content 不是字符串。".into(),
-        )),
+        Some(_) => Err(Error::InvalidResponse(i18n::t().resp_content_type.into())),
     }
 }
 
@@ -194,7 +189,7 @@ fn truncate(text: &str) -> String {
         result.push('…');
     }
     if result.is_empty() {
-        "空的错误响应".into()
+        i18n::t().resp_empty_error.into()
     } else {
         result
     }
@@ -218,17 +213,17 @@ fn read_limited(mut response: reqwest::blocking::Response, secret: &str) -> Resu
         .read_to_end(&mut buffer)
         .map_err(|err| Error::NetworkError(redact(&err.to_string(), secret)))?;
     if buffer.len() as u64 > MAX_BODY_BYTES {
-        return Err(Error::InvalidResponse("响应超过 1MB，已拒绝解析。".into()));
+        return Err(Error::InvalidResponse(i18n::t().resp_too_large.into()));
     }
-    String::from_utf8(buffer).map_err(|_| Error::InvalidResponse("响应不是 UTF-8。".into()))
+    String::from_utf8(buffer).map_err(|_| Error::InvalidResponse(i18n::t().resp_not_utf8.into()))
 }
 
 fn map_transport_error(err: &reqwest::Error, secret: &str, timeout_secs: u64) -> Error {
     if err.is_connect() {
         let reason = if err.is_timeout() {
-            "连接 API 服务器超时"
+            i18n::t().net_connect_timeout
         } else {
-            "无法连接到 API 服务器"
+            i18n::t().net_connect_failed
         };
         return Error::NetworkError(reason.into());
     }
@@ -239,9 +234,7 @@ fn map_transport_error(err: &reqwest::Error, secret: &str, timeout_secs: u64) ->
     }
     let text = redact(&err.to_string(), secret);
     if text.to_ascii_lowercase().contains("certificate") {
-        return Error::NetworkError(
-            "TLS 证书校验失败。cmdgen 不会关闭证书验证，请检查系统证书或代理。".into(),
-        );
+        return Error::NetworkError(i18n::t().net_tls.into());
     }
     Error::NetworkError(text)
 }

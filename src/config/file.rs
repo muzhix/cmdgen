@@ -6,11 +6,13 @@ use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::error::Error;
 use crate::fsutil;
+use crate::i18n::{self, fill, Lang};
 
 use super::EnvMap;
 
-pub const DEFAULT_CONFIG_TOML: &str = r#"# cmdgen 配置。不要在此文件中写入 API Key。
-# 用 `cmdgen config use <name>` 在 deepseek 和 bailian 之间切换。
+pub const DEFAULT_CONFIG_TOML: &str = r#"# cmdgen configuration. Do not put an API key in this file.
+# Switch between deepseek and bailian with `cmdgen config use <name>`.
+language = "en"
 active = "deepseek"
 
 [providers.deepseek]
@@ -36,6 +38,7 @@ include_cwd = false
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FileConfig {
+    pub language: Option<String>,
     pub active: Option<String>,
     pub provider: ProviderFile,
     pub providers: BTreeMap<String, ProviderProfile>,
@@ -97,7 +100,7 @@ pub fn home_dir(env: &EnvMap) -> Result<PathBuf, Error> {
     }
     directories::BaseDirs::new()
         .map(|dirs| dirs.home_dir().to_path_buf())
-        .ok_or_else(|| Error::Usage("无法确定用户主目录。请设置 HOME。".into()))
+        .ok_or_else(|| Error::Usage(i18n::t().err_no_home.into()))
 }
 
 pub fn config_dir(env: &EnvMap) -> Result<PathBuf, Error> {
@@ -125,13 +128,34 @@ pub fn parse_config(text: &str, path: &Path) -> Result<FileConfig, Error> {
     if let Some(key) = forbidden_secret_key(text) {
         return Err(Error::invalid(
             path,
-            format!("配置文件不能包含 {key}。API Key 请使用环境变量或 `cmdgen config set-key`。"),
+            fill(i18n::t().err_secret_in_config, &[("key", key)]),
         ));
     }
     let file: FileConfig =
         toml::from_str(text).map_err(|err| Error::invalid(path, err.to_string()))?;
+    apply_parsed_language(&file, path)?;
     validate_config(&file, path)?;
     Ok(file)
+}
+
+/// Read `language` after the file parses. Invalid codes are reported in English.
+/// A missing key selects `en`. An explicit `--lang` or `CMDGEN_LANG` is left in place.
+pub fn apply_parsed_language(file: &FileConfig, path: &Path) -> Result<Lang, Error> {
+    let Some(raw) = trimmed(&file.language) else {
+        i18n::apply_config_language(Lang::En);
+        return Ok(Lang::En);
+    };
+    match i18n::parse_lang_code(raw) {
+        Ok(lang) => {
+            i18n::apply_config_language(lang);
+            Ok(lang)
+        }
+        Err(()) => Err(Error::Usage(format!(
+            "invalid config ({}): {}",
+            path.display(),
+            i18n::unknown_language_message(raw)
+        ))),
+    }
 }
 
 pub fn validate_config(file: &FileConfig, path: &Path) -> Result<(), Error> {
@@ -140,15 +164,16 @@ pub fn validate_config(file: &FileConfig, path: &Path) -> Result<(), Error> {
     for (raw_name, profile) in &file.providers {
         let name = normalize_in_file(raw_name, path)?;
         if names.insert(name.clone(), raw_name.clone()).is_some() {
-            return Err(Error::invalid(path, format!("provider 名称重复: {name}")));
+            return Err(Error::invalid(
+                path,
+                fill(i18n::t().err_provider_duplicate, &[("name", &name)]),
+            ));
         }
         if let Some(var) = trimmed(&profile.api_key_env) {
             if !is_env_var_name(var) {
                 return Err(Error::invalid(
                     path,
-                    format!(
-                        "providers.{name}.api_key_env 必须是环境变量名，例如 DASHSCOPE_API_KEY。"
-                    ),
+                    fill(i18n::t().err_api_key_env, &[("name", &name)]),
                 ));
             }
         }
@@ -157,18 +182,13 @@ pub fn validate_config(file: &FileConfig, path: &Path) -> Result<(), Error> {
         {
             return Err(Error::invalid(
                 path,
-                format!(
-                    "[providers.{name}] 必须设置 base_url 和 model。预设 deepseek / bailian 可以省略这两项。"
-                ),
+                fill(i18n::t().err_profile_needs_endpoint, &[("name", &name)]),
             ));
         }
     }
 
     if !names.is_empty() && legacy {
-        return Err(Error::invalid(
-            path,
-            "不能同时使用 [provider] 和 [providers]。请只保留 [providers.<name>]，并用 active 选择当前项。",
-        ));
+        return Err(Error::invalid(path, i18n::t().err_legacy_and_providers));
     }
 
     if let Some(active) = trimmed(&file.active) {
@@ -177,30 +197,20 @@ pub fn validate_config(file: &FileConfig, path: &Path) -> Result<(), Error> {
         if !names.is_empty() && !known {
             return Err(Error::invalid(
                 path,
-                format!(
-                    "active 指向未知 provider: {active}。请改成 [providers] 中的名称，或预设 deepseek / bailian。"
-                ),
+                fill(i18n::t().err_active_unknown, &[("active", &active)]),
             ));
         }
         if names.is_empty() && legacy {
-            return Err(Error::invalid(
-                path,
-                "active 需要配合 [providers.<name>] 使用。当前文件仍是单个 [provider]。",
-            ));
+            return Err(Error::invalid(path, i18n::t().err_active_needs_providers));
         }
         if names.is_empty() && !legacy && !super::is_preset(&active) {
             return Err(Error::invalid(
                 path,
-                format!(
-                    "active 指向未知 provider: {active}。请改成预设 deepseek / bailian，或先添加 [providers.{active}]。"
-                ),
+                fill(i18n::t().err_active_unknown_preset, &[("active", &active)]),
             ));
         }
     } else if !names.is_empty() {
-        return Err(Error::invalid(
-            path,
-            "配置了 [providers] 但没有 active。请设置 active，或运行 `cmdgen config use <name>`。",
-        ));
+        return Err(Error::invalid(path, i18n::t().err_providers_need_active));
     }
     Ok(())
 }
@@ -215,10 +225,7 @@ pub fn activate_provider(path: &Path, name: &str) -> Result<String, Error> {
     let text = fsutil::read_to_string(path)?;
     let file = parse_config(&text, path)?;
     if provider_file_has_content(&file.provider) && file.providers.is_empty() {
-        return Err(Error::invalid(
-            path,
-            "当前配置只有单个 [provider]。请改成 [providers.<name>] 后再切换。",
-        ));
+        return Err(Error::invalid(path, i18n::t().err_legacy_only_switch));
     }
     let name = normalize_in_file(name, path)?;
     let known = file
@@ -228,9 +235,7 @@ pub fn activate_provider(path: &Path, name: &str) -> Result<String, Error> {
     if !known && !super::is_preset(&name) {
         return Err(Error::invalid(
             path,
-            format!(
-                "未知的 provider: {name}。请先在配置中加入 [providers.{name}]，或改用预设 deepseek / bailian。"
-            ),
+            fill(i18n::t().err_unknown_provider, &[("name", &name)]),
         ));
     }
     let mut doc = text
@@ -252,10 +257,7 @@ pub fn update_provider(
     model: Option<&str>,
 ) -> Result<ProviderUpdate, Error> {
     if base_url.is_none() && model.is_none() {
-        return Err(Error::Usage(
-            "请至少给出 --model 或 --base-url。示例: cmdgen config set --provider bailian --base-url https://example.com/v1"
-                .into(),
-        ));
+        return Err(Error::Usage(i18n::t().err_set_needs_field.into()));
     }
     if !path.exists() {
         return Err(Error::ConfigNotFound {
@@ -265,10 +267,7 @@ pub fn update_provider(
     let text = fsutil::read_to_string(path)?;
     let file = parse_config(&text, path)?;
     if provider_file_has_content(&file.provider) && file.providers.is_empty() {
-        return Err(Error::invalid(
-            path,
-            "当前配置只有单个 [provider]。请改成 [providers.<name>] 后再修改。",
-        ));
+        return Err(Error::invalid(path, i18n::t().err_legacy_only_edit));
     }
 
     let name = match name {
@@ -276,10 +275,7 @@ pub fn update_provider(
         None => match trimmed(&file.active) {
             Some(active) => normalize_in_file(active, path)?,
             None => {
-                return Err(Error::Usage(
-                    "配置里没有 active。请用 --provider 指定 provider，或先运行 `cmdgen config use <name>`。"
-                        .into(),
-                ));
+                return Err(Error::Usage(i18n::t().err_no_active_for_set.into()));
             }
         },
     };
@@ -299,7 +295,7 @@ pub fn update_provider(
     {
         return Err(Error::invalid(
             path,
-            format!("未知的 provider: {name}。新建档案时必须同时给出 --base-url 和 --model。"),
+            fill(i18n::t().err_new_provider_needs_both, &[("name", &name)]),
         ));
     }
     let key = existing_key.unwrap_or_else(|| name.clone());
@@ -328,7 +324,7 @@ fn canonical_base_url(value: &str) -> Result<String, Error> {
 fn canonical_model(path: &Path, value: &str) -> Result<String, Error> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(Error::invalid(path, "model 不能为空。"));
+        return Err(Error::invalid(path, i18n::t().err_model_empty));
     }
     Ok(trimmed.to_string())
 }
@@ -344,7 +340,7 @@ fn write_profile_fields(
         providers.insert(key, Item::Table(Table::new()));
     }
     let Some(Item::Table(profile)) = providers.get_mut(key) else {
-        return Err(format!("providers.{key} 必须是表。"));
+        return Err(fill(i18n::t().err_profile_must_be_table, &[("key", key)]));
     };
     if let Some(url) = base_url {
         assign_string(profile, "base_url", url)?;
@@ -363,7 +359,7 @@ fn ensure_providers_table(doc: &mut DocumentMut) -> Result<&mut Table, String> {
     }
     match doc.get_mut("providers") {
         Some(Item::Table(table)) => Ok(table),
-        _ => Err("providers 必须是表。".into()),
+        _ => Err(i18n::t().err_providers_must_be_table.into()),
     }
 }
 
@@ -376,7 +372,7 @@ fn assign_string(table: &mut Table, key: &str, value: &str) -> Result<(), String
             *existing = updated;
             Ok(())
         }
-        Some(_) => Err(format!("{key} 必须是字符串。")),
+        Some(_) => Err(fill(i18n::t().err_key_must_be_string, &[("key", key)])),
         None => {
             table.insert(key, toml_edit::value(value));
             Ok(())
@@ -422,7 +418,7 @@ fn set_active(doc: &mut DocumentMut, name: &str) -> Result<(), String> {
             *value = updated;
             Ok(())
         }
-        Some(_) => Err("active 必须是字符串。".into()),
+        Some(_) => Err(i18n::t().err_active_must_be_string.into()),
         None => {
             doc.insert("active", toml_edit::value(name));
             Ok(())
@@ -430,14 +426,22 @@ fn set_active(doc: &mut DocumentMut, name: &str) -> Result<(), String> {
     }
 }
 
-pub fn init_config(path: &Path) -> Result<InitOutcome, Error> {
+pub fn render_default_config(language: Lang) -> String {
+    DEFAULT_CONFIG_TOML.replacen(
+        "language = \"en\"",
+        &format!("language = \"{}\"", language.as_str()),
+        1,
+    )
+}
+
+pub fn init_config(path: &Path, language: Lang) -> Result<InitOutcome, Error> {
     if path.exists() {
         return Ok(InitOutcome::AlreadyExists(path.to_path_buf()));
     }
     if let Some(parent) = path.parent() {
         fsutil::ensure_dir(parent, 0o700)?;
     }
-    fsutil::atomic_write(path, DEFAULT_CONFIG_TOML, 0o600)?;
+    fsutil::atomic_write(path, &render_default_config(language), 0o600)?;
     Ok(InitOutcome::Created(path.to_path_buf()))
 }
 
@@ -489,7 +493,7 @@ where
         type Value = f64;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("数字")
+            formatter.write_str(i18n::t().expect_number)
         }
 
         fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<f64, E> {
@@ -516,7 +520,7 @@ where
         type Value = u64;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("整数")
+            formatter.write_str(i18n::t().expect_integer)
         }
 
         fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<u64, E> {

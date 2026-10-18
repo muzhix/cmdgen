@@ -105,7 +105,7 @@ async fn api_failure_keeps_stdout_empty_and_redacts_secrets() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("401"));
     assert!(stderr.contains("[REDACTED]"));
-    assert!(!stderr.contains("正在生成"));
+    assert!(!stderr.contains("Generating"));
     common::assert_no_secret(&stderr, SECRET);
 }
 
@@ -143,7 +143,7 @@ async fn verbose_omits_prompt_and_key() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("deepseek-flash"));
     assert!(stderr.contains("/chat/completions"));
-    assert!(stderr.contains("耗时"));
+    assert!(stderr.contains("elapsed"));
     assert!(!stderr.contains("UNIQUE_PROMPT_TOKEN"));
     common::assert_no_secret(&stderr, SECRET);
 }
@@ -164,7 +164,10 @@ async fn timeout_reports_on_stderr() {
     let mut cmd = sandbox.command();
     provider_env(&mut cmd, &server.uri());
     cmd.args(["--timeout", "1", "列出文件"]);
-    cmd.assert().failure().stdout("").stderr(contains("超时"));
+    cmd.assert()
+        .failure()
+        .stdout("")
+        .stderr(contains("timed out"));
 }
 
 #[tokio::test]
@@ -190,7 +193,10 @@ async fn tty_shows_loading_then_only_the_command() {
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(raw.contains('⠋') && raw.contains("正在生成"), "raw={raw:?}");
+    assert!(
+        raw.contains('⠋') && raw.contains("Generating"),
+        "raw={raw:?}"
+    );
     assert_eq!(visible, "ls");
 }
 
@@ -208,9 +214,9 @@ async fn tty_loading_clears_before_the_error() {
         "status={:?}\nraw={raw:?}\nvisible={visible:?}",
         output.status
     );
-    assert!(raw.contains("正在生成"), "raw={raw:?}");
+    assert!(raw.contains("Generating"), "raw={raw:?}");
     assert!(visible.contains("403"), "visible={visible:?}");
-    assert!(!visible.contains("正在生成"), "visible={visible:?}");
+    assert!(!visible.contains("Generating"), "visible={visible:?}");
 }
 
 fn tty_cmdgen(sandbox: &common::Sandbox, base_url: &str, args: &[&str]) -> std::process::Output {
@@ -298,7 +304,7 @@ fn version_help_and_reserved_subcommand() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(contains("不会执行生成的命令"));
+        .stdout(contains("does not run the generated command"));
     sandbox.command().args(["config"]).assert().failure();
 }
 
@@ -310,7 +316,7 @@ fn config_init_is_private_and_idempotent() {
         .args(["config", "init"])
         .assert()
         .success()
-        .stdout(contains("已创建"));
+        .stdout(contains("created"));
     let path = sandbox.config_dir().join("config.toml");
     let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
@@ -338,12 +344,13 @@ fn config_init_is_private_and_idempotent() {
     assert!(original.contains("[providers.bailian]"));
     assert!(original.contains("active = \"deepseek\""));
     assert!(original.contains("qwen3.8-flash"));
+    assert!(original.contains("language = \"en\""));
     sandbox
         .command()
         .args(["config", "init"])
         .assert()
         .success()
-        .stdout(contains("已存在"));
+        .stdout(contains("already exists"));
     assert_eq!(fs::read_to_string(&path).unwrap(), original);
 }
 
@@ -357,7 +364,8 @@ fn config_show_redacts_key_and_set_key_rejects_argv() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stdout.contains("环境变量 CMDGEN_API_KEY"));
+    assert!(stdout.contains("environment variable CMDGEN_API_KEY"));
+    assert!(stdout.contains("language: en"));
     assert!(stdout.contains("deepseek-flash"));
     common::assert_no_secret(&stdout, SECRET);
     common::assert_no_secret(&stderr, SECRET);
@@ -392,8 +400,8 @@ async fn doctor_reports_without_printing_the_key_or_calling_completions() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(output.status.success(), "stderr={stderr}\nstdout={stdout}");
-    assert!(stdout.contains("结果: 可用"));
-    assert!(stdout.contains("已脱敏"));
+    assert!(stdout.contains("result: ready"));
+    assert!(stdout.contains("redacted"));
     common::assert_no_secret(&stdout, SECRET);
     common::assert_no_secret(&stderr, SECRET);
     let requests = server.received_requests().await.unwrap();
@@ -445,7 +453,7 @@ fn config_use_switches_the_saved_provider() {
         .args(["config", "use", "bailian"])
         .assert()
         .success()
-        .stdout(contains("已切换到 provider: bailian"));
+        .stdout(contains("switched to provider: bailian"));
     let updated = fs::read_to_string(&path).unwrap();
     assert!(updated.contains("active = \"bailian\"") || updated.contains("active = 'bailian'"));
     assert!(updated.contains("https://api.deepseek.com"));
@@ -508,7 +516,7 @@ fn config_set_writes_the_provider_endpoint() {
         ])
         .assert()
         .success()
-        .stdout(contains("已更新 provider: bailian"))
+        .stdout(contains("updated provider: bailian"))
         .stdout(contains("https://llm.example.com/compatible-mode/v1"))
         .stdout(contains("qwen-plus"));
 
@@ -558,4 +566,23 @@ async fn named_provider_uses_its_endpoint_without_thinking() {
         serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
     assert_eq!(body["model"], "qwen-plus");
     assert!(body.get("thinking").is_none());
+}
+
+#[test]
+fn chinese_init_and_use_messages() {
+    let sandbox = common::Sandbox::new();
+    sandbox
+        .command()
+        .args(["config", "init", "--lang", "zh"])
+        .assert()
+        .success()
+        .stdout(contains("已创建"));
+    let text = fs::read_to_string(sandbox.config_dir().join("config.toml")).unwrap();
+    assert!(text.contains("language = \"zh\""));
+    sandbox
+        .command()
+        .args(["config", "use", "bailian", "--lang", "zh"])
+        .assert()
+        .success()
+        .stdout(contains("已切换到 provider: bailian"));
 }

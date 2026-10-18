@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{missing_api_key, Error};
 use crate::fsutil;
+use crate::i18n::{self, fill};
 
 pub const SERVICE_NAME: &str = "cmdgen";
 
@@ -56,6 +57,7 @@ impl EnvMap {
             "CMDGEN_PROVIDER",
             "CMDGEN_SHELL",
             "CMDGEN_TIMEOUT",
+            "CMDGEN_LANG",
         ];
         let mut env = Self::new();
         for key in KEYS {
@@ -106,7 +108,7 @@ impl SecretStore for KeyringStore {
     fn set(&self, account: &str, secret: &str) -> Result<(), Error> {
         let secret = secret.trim();
         if secret.is_empty() {
-            return Err(Error::Usage("API Key 不能为空。".into()));
+            return Err(Error::Usage(i18n::t().err_api_key_empty.into()));
         }
         let entry = open_entry(account)?;
         entry.set_password(secret).map_err(map_keyring_err)
@@ -129,13 +131,16 @@ fn open_entry(account: &str) -> Result<keyring::Entry, Error> {
 fn map_keyring_err(err: keyring::Error) -> Error {
     match err {
         keyring::Error::NoEntry => Error::CredentialStoreUnavailable {
-            reason: "没有找到对应凭据".into(),
+            reason: i18n::t().err_no_entry.into(),
         },
         keyring::Error::NoStorageAccess(inner) => Error::CredentialStoreUnavailable {
-            reason: format!("无法访问系统凭据存储: {inner}"),
+            reason: fill(i18n::t().err_no_storage, &[("detail", &inner.to_string())]),
         },
         keyring::Error::PlatformFailure(inner) => Error::CredentialStoreUnavailable {
-            reason: format!("系统凭据存储失败: {inner}"),
+            reason: fill(
+                i18n::t().err_platform_failure,
+                &[("detail", &inner.to_string())],
+            ),
         },
         other => Error::CredentialStoreUnavailable {
             reason: other.to_string(),
@@ -163,7 +168,7 @@ impl SecretStore for MemoryStore {
             .values
             .lock()
             .map_err(|_| Error::CredentialStoreUnavailable {
-                reason: "内存凭据存储锁已损坏".into(),
+                reason: i18n::t().err_memory_lock.into(),
             })?;
         Ok(guard.get(account).cloned())
     }
@@ -171,13 +176,13 @@ impl SecretStore for MemoryStore {
     fn set(&self, account: &str, secret: &str) -> Result<(), Error> {
         let secret = secret.trim();
         if secret.is_empty() {
-            return Err(Error::Usage("API Key 不能为空。".into()));
+            return Err(Error::Usage(i18n::t().err_api_key_empty.into()));
         }
         let mut guard = self
             .values
             .lock()
             .map_err(|_| Error::CredentialStoreUnavailable {
-                reason: "内存凭据存储锁已损坏".into(),
+                reason: i18n::t().err_memory_lock.into(),
             })?;
         guard.insert(account.to_string(), secret.to_string());
         Ok(())
@@ -188,7 +193,7 @@ impl SecretStore for MemoryStore {
             .values
             .lock()
             .map_err(|_| Error::CredentialStoreUnavailable {
-                reason: "内存凭据存储锁已损坏".into(),
+                reason: i18n::t().err_memory_lock.into(),
             })?;
         Ok(guard.remove(account).is_some())
     }
@@ -254,12 +259,8 @@ impl CredentialFile {
             return Ok(CredentialDocument::default());
         }
         let text = fsutil::read_to_string(&self.path)?;
-        toml::from_str(&text).map_err(|_| {
-            Error::invalid(
-                &self.path,
-                "凭据文件无法解析。请删除该文件后重新运行 `cmdgen config set-key`。",
-            )
-        })
+        toml::from_str(&text)
+            .map_err(|_| Error::invalid(&self.path, i18n::t().err_credentials_unreadable))
     }
 
     fn store(&self, document: &CredentialDocument) -> Result<(), Error> {
@@ -272,7 +273,7 @@ impl CredentialFile {
             }
         }
         let text = toml::to_string(document)
-            .map_err(|_| Error::invalid(&self.path, "无法写入凭据文件。请检查目录是否可写。"))?;
+            .map_err(|_| Error::invalid(&self.path, i18n::t().err_credentials_unwritable))?;
         fsutil::atomic_write(&self.path, &text, 0o600)?;
         fsutil::set_mode(&self.path, 0o600)
     }
@@ -341,12 +342,12 @@ pub fn delete_api_key(
     };
     let file_removed = file.delete(account)?;
     if !keyring && !file_removed {
-        let mut message = format!(
-            "当前 provider（{account}）在系统凭据存储和本地凭据文件中都没有可删除的 API Key。"
-        );
+        let mut message = fill(i18n::t().err_nothing_to_delete, &[("account", account)]);
         if let Some(reason) = store_problem {
-            message.push_str("\n系统凭据存储当前不可用: ");
-            message.push_str(&reason);
+            message.push_str(&fill(
+                i18n::t().store_unavailable_now,
+                &[("reason", &reason)],
+            ));
         }
         return Err(Error::Usage(message));
     }
@@ -368,7 +369,7 @@ pub fn resolve_api_key(
     if let Some(secret) = env.get("CMDGEN_API_KEY") {
         return Ok(ResolvedKey {
             secret: secret.trim().to_string(),
-            source_label: "环境变量 CMDGEN_API_KEY".into(),
+            source_label: fill(i18n::t().source_env, &[("name", "CMDGEN_API_KEY")]),
         });
     }
 
@@ -376,7 +377,7 @@ pub fn resolve_api_key(
         if let Some(secret) = env.get(provider_var) {
             return Ok(ResolvedKey {
                 secret: secret.trim().to_string(),
-                source_label: format!("环境变量 {provider_var}"),
+                source_label: fill(i18n::t().source_env, &[("name", provider_var)]),
             });
         }
     }
@@ -385,7 +386,10 @@ pub fn resolve_api_key(
         Ok(Some(secret)) => {
             return Ok(ResolvedKey {
                 secret,
-                source_label: format!("系统凭据存储（服务 {SERVICE_NAME}，账号 {provider}）"),
+                source_label: fill(
+                    i18n::t().source_keyring,
+                    &[("service", SERVICE_NAME), ("account", provider)],
+                ),
             });
         }
         Ok(None) => None,
@@ -396,7 +400,10 @@ pub fn resolve_api_key(
     match file.get(provider)? {
         Some(secret) => Ok(ResolvedKey {
             secret,
-            source_label: format!("本地凭据文件（{}）", file.path().display()),
+            source_label: fill(
+                i18n::t().source_file,
+                &[("path", &file.path().display().to_string())],
+            ),
         }),
         None => Err(missing_api_key(provider, api_key_env, store_problem)),
     }
@@ -405,7 +412,7 @@ pub fn resolve_api_key(
 fn require_secret(secret: &str) -> Result<String, Error> {
     let secret = secret.trim();
     if secret.is_empty() {
-        Err(Error::Usage("API Key 不能为空。".into()))
+        Err(Error::Usage(i18n::t().err_api_key_empty.into()))
     } else {
         Ok(secret.to_string())
     }

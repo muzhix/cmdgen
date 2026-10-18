@@ -1,164 +1,225 @@
-# cmdgen
+<p align="center">
+  <a href="README.zh-CN.md">中文</a>
+</p>
 
-[![CI](https://github.com/muzhix/cmdgen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/muzhix/cmdgen/actions/workflows/ci.yml)[![Release](https://github.com/muzhix/cmdgen/actions/workflows/release.yml/badge.svg)](https://github.com/muzhix/cmdgen/actions/workflows/release.yml)
+<p align="center">
+  <img src="docs/logo.svg" width="88" alt="cmdgen">
+</p>
 
-> cmdgen — AI-powered shell command generation for your terminal.
+<h1 align="center">cmdgen</h1>
 
-`cmdgen` 把自然语言转换成当前操作系统和 Shell 可用的命令。它是一个独立、轻量、BYOK 的命令行工具：默认调用 DeepSeek 官方 API，也可以改成任何 OpenAI-compatible Chat Completions 接口。
+<p align="center">
+  <strong>Turn a sentence into a command for the current shell.</strong><br>
+  AI-powered shell command generation for your terminal.
+</p>
 
-生成结果只打印到标准输出，或在 Zsh/Bash 里填回输入行。**cmdgen 不会执行生成的命令。** 请先阅读、按需修改，再自己按 Enter。
+<p align="center">
+  <a href="https://github.com/muzhix/cmdgen/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/muzhix/cmdgen/ci.yml?branch=main&style=flat-square&label=ci"></a>
+  &nbsp;
+  <a href="https://github.com/muzhix/cmdgen/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/muzhix/cmdgen?style=flat-square&color=C9842A&label=release"></a>
+  &nbsp;
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/muzhix/cmdgen?style=flat-square&color=5C6B7A"></a>
+  &nbsp;
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-3E4C59?style=flat-square">
+  &nbsp;
+  <img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-C9842A?style=flat-square&logo=rust&logoColor=white">
+</p>
 
-错误和诊断使用中文，写到标准错误。
+<p align="center">
+  <img src="docs/demo-shell.gif" width="928" alt="In Zsh, type a request and press Ctrl+G. The suggestion appears as gray ghost text. Tab accepts it. A destructive suggestion is shown in red with a warning and is not executed.">
+</p>
 
-## 安装
+`cmdgen` turns a sentence of natural language into a command the current operating system and shell can run. It is a standalone, lightweight, bring-your-own-key tool: it calls DeepSeek by default, and can be pointed at any OpenAI-compatible Chat Completions endpoint.
 
-macOS 和 Linux 可以一条命令安装最新的预编译二进制：
+The result is printed to standard output, or written back into the Zsh / Bash input line. Read it, edit it if you need to, then press Enter yourself. cmdgen does not run the generated command.
+
+The interface language defaults to English. Errors and diagnostics go to standard error and follow the current interface language.
+
+## Language
+
+These choices apply only to this run and are not written back to the config:
+
+```bash
+cmdgen --lang zh "list every docker container"
+cmdgen --lang en --help
+```
+
+`en-US` is treated as `en`. `zh-CN` and `zh-Hans` are treated as `zh`. The `CMDGEN_LANG` environment variable works the same way. A persistent default lives in `language` in `config.toml`. Priority:
+
+1. `--lang`
+2. `CMDGEN_LANG`
+3. `language`
+4. built-in `en`
+
+Ctrl+G invokes cmdgen without `--lang`, so the shortcut path uses `language` from the config file. `cmdgen config init` writes `language`: the value of `--lang` or `CMDGEN_LANG` when one of those is set, otherwise `en`. An unknown language code is reported in English, with the supported codes listed.
+
+## What it does
+
+- Turns a description into one command. Standard output is only that command, so it can be piped.
+- Zsh shows the suggestion as ghost text. `Tab` or Right accepts it. Bash replaces the current input line on success. The default shortcut is `Ctrl+G`.
+- You keep the API key. It does not go into `config.toml` or command-line arguments.
+- Prebuilt binaries for macOS and Linux. Rust is not required.
+
+It does not chat, remember a conversation, generate code, or act as an agent, and it does not do tool calling or MCP. It does not read command history, environment variables, or files in the directory. An input-line shortcut for Fish or pure POSIX sh is out of scope.
+
+## Install
+
+macOS and Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash
 ```
 
-脚本按当前系统选择 GitHub Release 里的压缩包，校验 sha256（发布里带有 `SHA256SUMS` 时），并安装到已经在 `PATH` 里、且当前用户可写的目录，优先 `~/.local/bin`。不会修改 `~/.zshrc` 或 `~/.bashrc`。
+The script picks the archive for the current system from the [GitHub Release](https://github.com/muzhix/cmdgen/releases/latest), checks sha256 when the release includes `SHA256SUMS`, and installs into a directory that is already on `PATH` and writable by the current user, preferring `~/.local/bin`. It does not edit `~/.zshrc` or `~/.bashrc`.
 
-指定版本或目录：
+Pin a version or directory:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash -s -- --version v0.1.1
+curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash -s -- --version v0.1.2
 CMDGEN_BIN_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash
 ```
 
-如果安装目录不在 `PATH` 里，脚本会打印需要加到启动文件的那一行，但不会自己写入。
+Without `--version`, it installs the latest release. If the install directory is not on `PATH`, the script prints the line to add to a startup file. It does not write that line itself.
 
-只删除二进制，不删除配置和凭据：
+Remove only the binary. Config and credentials stay:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash -s -- --uninstall
 ```
 
-启动文件里还有 Shell 集成时，卸载会停下来，并提示先运行 `cmdgen shell uninstall`。
+If a startup file still has the shell integration, uninstall stops and tells you to run `cmdgen shell uninstall` first.
 
-也可以从 GitHub Release 下载对应平台的压缩包后，自行把里面的 `cmdgen` 放到 `PATH`：
+You can also download the archive for your platform from the release and put the `cmdgen` binary on `PATH` yourself:
 
 - `aarch64-apple-darwin`
 - `x86_64-apple-darwin`
 - `x86_64-unknown-linux-gnu`
 - `aarch64-unknown-linux-gnu`
 
-Windows 不在发布范围内。
+Windows is not in the release set. See [DEV.md](DEV.md) to build from source.
 
-## 配置 API Key
-
-API Key 不会写入 `config.toml`，也不会通过命令行参数传入。
+## Quick start
 
 ```bash
 cmdgen config init
 cmdgen config set-key
+cmdgen "list every docker container, including stopped ones"
 ```
 
-`set-key` 会隐藏输入。系统凭据存储可用时，Key 保存到服务名 `cmdgen`、账号为当前 provider 名称的条目。macOS 使用登录钥匙串；Linux 使用 Secret Service。凭据存储不可用时，`set-key` 写入 `credentials.toml`（与 `config.toml` 同目录，权限 `0600`）。关掉终端后再打开仍然有效。同一用户下的其他进程可以读取该文件。容器和 CI 不依赖这个文件，请在每次启动时注入 `CMDGEN_API_KEY`。
+`set-key` hides input. When the system credential store is available, the key is saved under the service name `cmdgen` with the current provider name as the account. macOS uses the login keychain. Linux uses Secret Service. When the credential store is unavailable, it writes `credentials.toml` in the same directory (mode `0600`). The key remains after you close the terminal. Other processes of the same user can read that file. Containers and CI should inject `CMDGEN_API_KEY` on each start and not depend on this file.
 
-删除已保存的凭据：
+On success, standard output is only the command, for example `docker ps -a`.
+
+To use it on the input line, install the integration:
 
 ```bash
-cmdgen config delete-key
+cmdgen shell install zsh
+source ~/.zshrc
 ```
 
-非交互环境需要显式确认：`cmdgen config delete-key --yes`。
+Then type natural language and press `Ctrl+G`.
 
-也可以不运行 `set-key`，直接导出环境变量，见下文优先级。
+## Generate directly
 
-## 生成命令
+<p align="center">
+  <img src="docs/demo-cli.gif" width="863" alt="Three cmdgen prompts. stdout is only docker ps -a, find . -type f -size +100M, and docker logs --tail 200 nginx.">
+</p>
 
 ```bash
-cmdgen "列出所有 docker 容器，包括已经停止的"
-cmdgen "查找当前目录下超过 100MB 的文件"
+cmdgen "list all docker containers, including stopped ones"
+cmdgen "find files larger than 100MB"
+cmdgen "show the last 200 lines of the nginx logs"
 ```
 
-成功时标准输出只有命令，例如：
+The commands in the recording above are example results. Actual output depends on the model. In an interactive terminal, standard error shows a spinner while waiting, then clears it on success or failure. Redirecting or piping standard error hides the spinner. On success, standard error is still empty.
+
+Options go before the description:
 
 ```bash
-docker ps -a
-```
-
-在交互式终端里等待模型时，标准错误会显示转圈，结束或失败后擦掉。把标准错误重定向或接入管道时不显示，成功时标准错误仍然为空。
-
-选项要写在描述前面：
-
-```bash
-cmdgen --shell zsh --model deepseek-flash "查看 git 状态"
+cmdgen --shell zsh --model deepseek-flash "show git status"
 cmdgen -- --config
-cmdgen -- "-n 列出当前目录"
+cmdgen -- "-n list the current directory"
 ```
 
-`--` 后面的内容全部当作描述。因此 `cmdgen -- config` 会生成命令，而 `cmdgen config` 是配置子命令。
+Everything after `--` is the description. `cmdgen -- config` generates a command, while `cmdgen config` is the config subcommand.
 
-其他命令：
+One-shot overrides: `--provider`, `--model`, `--base-url`, `--shell`, `--timeout`, `--verbose`. Except for `--model` and `--base-url` saved by `config set`, these affect only this run. `--verbose` prints the model, endpoint, and elapsed time to stderr. It does not print the API key or the full prompt.
 
-```bash
-cmdgen config show
-cmdgen config providers
-cmdgen config use bailian
-cmdgen config set --provider bailian --base-url https://example.com/compatible-mode/v1
-cmdgen doctor
-cmdgen --version
-cmdgen --help
-```
+## Commands
 
-`config providers` 列出已保存的 provider，并标出当前项。`config use <name>` 把当前项写入配置文件。单次切换不改文件：`cmdgen --provider bailian "列出大文件"`。给某一家保存 Key：`cmdgen config set-key --provider bailian`。`--provider` 等选项要写在 `config` 之后；写在前面时，`config` 会被当成描述。
-
-`config set` 把 `--model`、`--base-url` 写入 `[providers.<name>]`。可以只写其中一个。`--provider` 省略时修改当前 `active`，不会切换当前项。`CMDGEN_MODEL` 和 `CMDGEN_BASE_URL` 不会被写入。
-
-单次覆盖参数：`--provider`、`--model`、`--base-url`、`--shell`、`--timeout`、`--verbose`。除了 `config set` 会保存 `--model` 和 `--base-url`，这些参数都只影响这一次。`--verbose` 只向 stderr 输出模型、接口和耗时，不输出 API Key，也不输出完整 prompt。
-
-## 配置优先级
-
-配置文件位于：
-
-- 设置了 `XDG_CONFIG_HOME` 时：`$XDG_CONFIG_HOME/cmdgen/config.toml`
-- 否则：`~/.config/cmdgen/config.toml`
-
-目录权限尽量为 `0700`，配置文件为 `0600`。
-
-非敏感配置的优先级：
-
-1. 命令行参数
-2. 环境变量
-3. TOML
-4. 内置默认值
-
-环境变量：
-
-| 变量 | 作用 |
+| Command | Effect |
 | --- | --- |
-| `CMDGEN_PROVIDER` | provider 名称 |
-| `CMDGEN_BASE_URL` | API 前缀，不要包含 `/chat/completions` |
-| `CMDGEN_MODEL` | 模型 ID |
-| `CMDGEN_SHELL` | 目标 shell。集成脚本会设置为 `zsh` 或 `bash` |
-| `CMDGEN_TIMEOUT` | 超时秒数 |
+| `cmdgen "<description>"` | Generate a command and print it to stdout |
+| `cmdgen config init` | Create the default config file |
+| `cmdgen config show` | Show the effective config, with the key redacted |
+| `cmdgen config providers` | List saved providers and mark the active one |
+| `cmdgen config use <name>` | Write the active provider to the config file |
+| `cmdgen config set` | Write `--model` or `--base-url` into the config |
+| `cmdgen config set-key` | Read an API key without echoing it |
+| `cmdgen config delete-key` | Delete the current provider's saved credential |
+| `cmdgen shell install zsh\|bash` | Install input-line integration |
+| `cmdgen shell uninstall [zsh\|bash]` | Remove the integration cmdgen manages |
+| `cmdgen doctor` | Check config, key source, network, and integration |
+| `cmdgen --version` / `--help` | Version and help |
 
-Shell 识别顺序：`--shell` > `CMDGEN_SHELL` > 配置里的 `shell.default` > `$SHELL` 的文件名 > `sh`。`auto` 表示继续向下识别。检测不会启动新的 Shell 进程。
+Non-interactive deletion needs an explicit confirmation: `cmdgen config delete-key --yes`.
 
-选中哪一家 provider 的顺序：
+`config set` can take just `--model` or just `--base-url`. When `--provider` is omitted, it updates the current `active` entry and does not switch the active provider. `CMDGEN_MODEL` and `CMDGEN_BASE_URL` are not written.
+
+Save a key for one provider: `cmdgen config set-key --provider bailian`. A one-shot switch does not edit the file: `cmdgen --provider bailian "list large files"`. Options such as `--provider` go after `config`; if they come first, `config` is treated as the description.
+
+## Configuration
+
+The config file is:
+
+- `$XDG_CONFIG_HOME/cmdgen/config.toml` when `XDG_CONFIG_HOME` is set
+- otherwise `~/.config/cmdgen/config.toml`
+
+The directory mode is `0700` when possible, and the config file is `0600`. The API key is not written to this file.
+
+Priority for non-secret settings:
+
+1. command-line flags
+2. environment variables
+3. TOML
+4. built-in defaults
+
+| Variable | Effect |
+| --- | --- |
+| `CMDGEN_API_KEY` | Generic API key. It wins over the credential sources below |
+| `CMDGEN_PROVIDER` | provider name |
+| `CMDGEN_BASE_URL` | API prefix; do not include `/chat/completions` |
+| `CMDGEN_MODEL` | model id |
+| `CMDGEN_SHELL` | target shell. The integration script sets this to `zsh` or `bash` |
+| `CMDGEN_TIMEOUT` | timeout in seconds |
+| `CMDGEN_LANG` | interface language, `en` or `zh` |
+| `DEEPSEEK_API_KEY` | DeepSeek key |
+| `DASHSCOPE_API_KEY` | Alibaba Cloud Bailian key |
+
+Shell resolution order: `--shell` > `CMDGEN_SHELL` > `shell.default` in the config > the filename of `$SHELL` > `sh`. `auto` means keep resolving. Detection does not start a new shell process.
+
+Which provider is selected:
 
 1. `--provider`
 2. `CMDGEN_PROVIDER`
-3. 配置里的 `active`；旧的单个 `[provider]` 则使用它的 `name`
-4. 内置 `deepseek`
+3. `active` in the config; a legacy single `[provider]` uses its `name`
+4. built-in `deepseek`
 
-选中后使用该档案自己的 `base_url` 和 `model`。`--base-url`、`CMDGEN_BASE_URL`、`--model`、`CMDGEN_MODEL` 仍可覆盖这一次的单项。内置预设是 `deepseek` 和 `bailian`，可以不写地址和模型。其他名称必须在 `[providers.<name>]` 里写上这两项，或在命令行同时给出。没有配置文件时默认使用 `deepseek`。
+After selection, that profile's own `base_url` and `model` are used. `--base-url`, `CMDGEN_BASE_URL`, `--model`, and `CMDGEN_MODEL` can still override those fields for this run. The built-in presets are `deepseek` and `bailian`; their address and model can be omitted. Any other name must set both fields in `[providers.<name>]`, or both must be given on the command line. With no config file, the default is `deepseek`.
 
-API Key 使用单独的顺序：
+The API key uses a separate order:
 
 1. `CMDGEN_API_KEY`
-2. 该档案的 `api_key_env`。没写时，`deepseek` 使用 `DEEPSEEK_API_KEY`，`bailian` 使用 `DASHSCOPE_API_KEY`。新的 `[providers.<name>]` 不会再落入 `OPENAI_API_KEY`
-3. 系统凭据存储中、账号等于 provider 名称的凭据
-4. 本地凭据文件 `credentials.toml` 中、同一 provider 的凭据
+2. that profile's `api_key_env`. When unset, `deepseek` uses `DEEPSEEK_API_KEY` and `bailian` uses `DASHSCOPE_API_KEY`. A new `[providers.<name>]` does not fall through to `OPENAI_API_KEY`
+3. the system credential store entry whose account equals the provider name
+4. the same provider's entry in the local credential file `credentials.toml`
 
-旧的单个 `[provider]` 且名称不是 `deepseek` 时，第 2 步仍是 `OPENAI_API_KEY`。
+A legacy single `[provider]` whose name is not `deepseek` still uses `OPENAI_API_KEY` at step 2.
 
-默认配置：
+Default config written by `cmdgen config init`:
 
 ```toml
+language = "en"
 active = "deepseek"
 
 [providers.deepseek]
@@ -181,26 +242,26 @@ keybinding = "ctrl-g"
 include_cwd = false
 ```
 
-默认启用 `deepseek`。切到百炼：
+Switch to Bailian:
 
 ```bash
 cmdgen config set-key --provider bailian
 cmdgen config use bailian
 ```
 
-`api_key_env` 只写环境变量名，不写密钥。百炼预设使用华北 2（北京）的共用域名，不包含业务空间 ID。若要改用业务空间专属域名，运行 `cmdgen config set --provider bailian --base-url <url>`。只想改这一次时，仍用 `--base-url`。旧的 `[provider]` 表仍然可以读取；它和 `[providers]` 不能同时出现。其他 OpenAI 兼容服务可以写成 `[providers.<name>]`，或用 `cmdgen config set --provider <name> --base-url <url> --model <model>` 创建。
+`api_key_env` is an environment variable name, not a secret. The Bailian preset uses the shared North China 2 (Beijing) endpoint and does not include a workspace id. To use a workspace-specific endpoint, run `cmdgen config set --provider bailian --base-url <url>`. For one run only, still use `--base-url`.
 
-`deepseek-flash` 不是永久有效的模型名。如果官方更换，请修改配置里的 `model`。DeepSeek 默认开启思考模式，cmdgen 在 provider 为 `deepseek` 时发送 `thinking.type=disabled`，以便直接返回命令。
+A legacy `[provider]` table can still be read; it cannot appear together with `[providers]`. Other OpenAI-compatible services can be written as `[providers.<name>]`, or created with `cmdgen config set --provider <name> --base-url <url> --model <model>`.
 
-`base_url` 是 API 前缀。客户端只拼接一次 `/chat/completions`，不会重复追加 `/v1`。非本机地址必须使用 HTTPS，且不能关闭证书校验。`127.0.0.1` 和 `localhost` 允许 HTTP，便于连接本机兼容服务。
+`deepseek-flash` is not a permanent model name. If the vendor changes it, update `model` in the config. DeepSeek enables thinking mode by default; when the provider is `deepseek`, cmdgen sends `thinking.type=disabled` so the response is a command.
 
-`shell.include_cwd` 默认为 `false`。只有设为 `true` 时，请求才会附带当前工作目录路径，不会上传目录内容、历史或环境变量。
+`base_url` is the API prefix. The client appends `/chat/completions` once and does not append `/v1` again. Non-local addresses must use HTTPS, and certificate checks cannot be disabled. `127.0.0.1` and `localhost` may use HTTP so a local compatible service can be reached.
 
-内置预设只有 `deepseek` 和 `bailian`。自定义服务写成 `[providers.<name>]` 即可，不需要插件系统。
+`shell.include_cwd` defaults to `false`. Only when it is `true` does the request include the current working directory path. Directory contents, history, and environment variables are not uploaded.
 
-## Shell 集成
+## Shell integration
 
-默认快捷键是 `Ctrl+G`，可在配置里用 `shell.keybinding = "ctrl-x"` 修改，然后重新安装。
+The default shortcut is `Ctrl+G`. To use another key, set `shell.keybinding = "ctrl-x"` in the config, then install again. Only `ctrl-<letter>` is supported.
 
 ```bash
 cmdgen shell install zsh
@@ -210,7 +271,7 @@ cmdgen shell install bash
 source ~/.bashrc
 ```
 
-重复安装不会追加第二段托管代码。卸载只删除 cmdgen 的标记区块和它自己的脚本：
+Installing again does not append a second managed block. Uninstall removes only cmdgen's marker block and its own script:
 
 ```bash
 cmdgen shell uninstall zsh
@@ -218,7 +279,7 @@ cmdgen shell uninstall bash
 cmdgen shell uninstall
 ```
 
-标记形如：
+The marker looks like:
 
 ```bash
 # >>> cmdgen managed integration >>>
@@ -226,60 +287,66 @@ source "$HOME/.config/cmdgen/integration.zsh"
 # <<< cmdgen managed integration <<<
 ```
 
-集成行为：
+Integration behavior:
 
-- 输入为空或只有空白时不发请求。
-- 生成期间在输入行末尾转圈。此时再按任意键会取消请求，并保留原始输入；这个按键不会插入到输入行。
-- Zsh 在结果是单行命令时不改已输入的文字，把建议显示成 ghost text。`Tab` 或右方向键接受，光标移到末尾。继续输入并偏离建议时 ghost 消失。建议还在时再按一次快捷键会重新生成。Enter 执行的是已经打出来的文字，不是 ghost。`rm`、`kill` 这类破坏性命令会标成红色并带 `⚠`，接受前不会进入输入行。不完整、会让 Shell 继续等待输入的建议会被丢弃。多行结果直接写入输入行。
-- Bash 在成功且结果非空时替换当前输入行，光标移到末尾。没有 ghost text。
-- 失败时保留原始输入。
-- 不会 `eval`，也不会自动按 Enter。
+- An empty or whitespace-only input line does not send a request.
+- A spinner runs at the end of the input line while generating. Pressing any key cancels the request and keeps the original input. That key is not inserted into the line.
+- When the Zsh result is a single-line command, typed text is left as-is and the suggestion is shown as ghost text. `Tab` or Right accepts it and moves the cursor to the end. Typing away from the suggestion clears the ghost. Pressing the shortcut again while a suggestion is showing regenerates it. Enter runs the text you typed, not the ghost. Destructive commands such as `rm` and `kill` are shown in red with `⚠` and are not inserted until you accept them. Incomplete suggestions that would leave the shell waiting for more input are discarded. Multi-line results are written into the input line directly.
+- On success with a non-empty result, Bash replaces the current input line and moves the cursor to the end. There is no ghost text.
+- On failure, the original input is kept.
+- Nothing is `eval`'d, and Enter is not pressed for you.
 
-要把单词 `shell` 当作描述，请写成 `cmdgen -- shell`。颜色可以用 `CMDGEN_HIGHLIGHT` 和 `CMDGEN_HIGHLIGHT_DESTRUCTIVE` 覆盖，格式与 Zsh 的 `region_highlight` 相同。
+To use the word `shell` as a description, write `cmdgen -- shell`. Colors can be overridden with `CMDGEN_HIGHLIGHT` and `CMDGEN_HIGHLIGHT_DESTRUCTIVE`, using the same format as Zsh `region_highlight`.
 
-Bash 集成使用 `bind -x`，需要 Bash 4 或更高版本。macOS 自带的 Bash 3.2 不能绑定快捷键；可以用 Homebrew 安装新版 Bash。Zsh 使用 ZLE，不依赖特定终端模拟器。
+The Bash integration uses `bind -x` and needs Bash 4 or newer. The Bash 3.2 that ships with macOS cannot bind the shortcut; install a newer Bash with Homebrew. Zsh uses ZLE and does not depend on a particular terminal emulator.
 
-## 诊断
+## Diagnostics
 
 ```bash
 cmdgen doctor
 ```
 
-它检查配置、Key 来源、凭据存储、API 连通性和集成文件。输出里的 Key 会脱敏。存在失败项时退出码为 1。网络检查只访问 `base_url`，不发送 API Key，也不发起补全请求。
+It checks the config, key source, credential store, API reachability, and integration files. Keys in the output are redacted. The exit code is 1 when any check fails. The network check only reaches `base_url`. It does not send the API key and does not start a completion.
 
-## 退出契约
+## Exit contract
 
-| 情况 | stdout | stderr | 退出码 |
+| Case | stdout | stderr | Exit |
 | --- | --- | --- | --- |
-| 成功 | 只有命令 | 默认无输出 | 0 |
-| 缺少 Key、超时、HTTP/API 错误、响应无法解析、配置错误 | 空 | 中文说明，不含 Key | 非零 |
+| Success | the command only | no output by default | 0 |
+| Missing key, timeout, HTTP/API error, unparseable response, config error | empty | an explanation in the interface language, with no key | non-zero |
 
-调试栈信息只在设置 `CMDGEN_DEBUG` 时出现。
+A debug stack appears only when `CMDGEN_DEBUG` is set.
 
-## 安全
+## Security
 
-- 不执行模型输出，没有 `--execute`。
-- 不把 Key 写入 `config.toml`、日志、错误信息或 Shell 历史。不要运行 `cmdgen config set-key <密钥>`。系统凭据存储不可用时，Key 只写入权限为 `0600` 的 `credentials.toml`。
-- 默认不记录 prompt、响应或命令历史，也不上传环境变量和文件内容。
-- 只使用 HTTPS。远程地址不能关闭 TLS 证书校验。
-- 提示词会要求模型优先给出非破坏性命令。这不能消除风险，执行前必须自己检查。
-- 删除、覆盖、改权限、拉取远程脚本或影响生产环境的命令尤其要人工确认。
+- Model output is not executed. There is no `--execute`.
+- The key is not written to `config.toml`, logs, error messages, or shell history. Do not run `cmdgen config set-key <secret>`. When the system credential store is unavailable, the key is written only to `credentials.toml` with mode `0600`.
+- Prompts, responses, and command history are not recorded by default. Environment variables and file contents are not uploaded.
+- Only HTTPS is used. Remote addresses cannot disable TLS certificate checks.
+- The prompt asks the model to prefer non-destructive commands. That does not remove the risk. Check the command yourself before running it.
+- Commands that delete, overwrite, change permissions, fetch remote scripts, or affect production need a human check.
 
-## 故障排查
+## Troubleshooting
 
-- **未找到 API Key**：运行 `cmdgen config set-key`，或导出 `CMDGEN_API_KEY`。没有钥匙串或 Secret Service 时，`set-key` 会把 Key 写入 `credentials.toml`。只在当前终端临时使用时，导出环境变量即可，关闭终端后失效。
-- **base_url 无效**：去掉末尾的 `/chat/completions`，并确认远程地址是 `https://`。
-- **请求超时**：增大 `generation.timeout_secs` 或设置 `CMDGEN_TIMEOUT`。默认 20 秒，不会自动重试。
-- **返回解释文字**：cmdgen 会拒绝明显的说明文本。把需求写得更具体后重试。
-- **Bash 没有反应**：确认 `bash --version` 至少是 4，并且已经 `source ~/.bashrc`。
-- **快捷键冲突**：安装时如果发现已有绑定会警告。把 `shell.keybinding` 改成其他 `ctrl-<字母>` 后重新安装。
+- **API key not found**: run `cmdgen config set-key`, or export `CMDGEN_API_KEY`. Without a keychain or Secret Service, `set-key` writes the key to `credentials.toml`. To use a key only in the current terminal, export the environment variable; it disappears when the terminal closes.
+- **Invalid base_url**: drop a trailing `/chat/completions`, and make sure a remote address is `https://`.
+- **Request timed out**: raise `generation.timeout_secs` or set `CMDGEN_TIMEOUT`. The default is 20 seconds, with no automatic retry.
+- **Explanation text came back**: cmdgen rejects obvious prose. Make the request more specific and try again.
+- **Bash does nothing**: confirm `bash --version` is at least 4, and that you have run `source ~/.bashrc`.
+- **Shortcut conflict**: install warns when a binding already exists. Change `shell.keybinding` to another `ctrl-<letter>` and install again.
 
-## 已知限制
+## Known limits
 
-- 不做通用聊天、多轮对话、代码生成、Agent、工具调用或 MCP。
-- 不支持 Fish，也不承诺纯 POSIX sh 的输入行快捷键。
-- 不缓存请求，也不提供常驻守护进程。
-- Windows 不在本版本的发布范围内。
-- 模型输出只是建议，语法和语义都可能是错的。
+- No general chat, multi-turn conversation, code generation, agent, tool calling, or MCP.
+- No Fish, and no promise of an input-line shortcut for pure POSIX sh.
+- No request cache and no resident daemon.
+- Windows is not in this version's release set.
+- Model output is a suggestion. Both syntax and meaning can be wrong.
 
-维护本仓库见 [DEV.md](DEV.md)。
+## Development
+
+See [DEV.md](DEV.md) for working on this repository, running tests, and re-recording the terminal demos above.
+
+## License
+
+[MIT](LICENSE)

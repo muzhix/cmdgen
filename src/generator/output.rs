@@ -1,4 +1,5 @@
 use crate::error::Error;
+use crate::i18n;
 
 pub fn normalize_command(raw: &str) -> Result<String, Error> {
     let text = raw.replace("\r\n", "\n").replace('\r', "\n");
@@ -8,9 +9,7 @@ pub fn normalize_command(raw: &str) -> Result<String, Error> {
         return Err(Error::EmptyCommand);
     }
     if looks_like_explanation(command) {
-        return Err(Error::InvalidResponse(
-            "模型返回了解释文本而不是纯命令。请重试，或把需求写得更具体。".into(),
-        ));
+        return Err(Error::InvalidResponse(i18n::t().err_explanation.into()));
     }
     Ok(command.to_string())
 }
