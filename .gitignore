@@ -2,3 +2,5 @@
 .DS_Store
 *.cmdgen.bak
 /graphify-out
+__pycache__/
+*.pyc
