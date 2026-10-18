@@ -35,24 +35,6 @@
 
 界面语言默认是英文。错误和诊断写到标准错误，并跟随当前界面语言。
 
-## 界面语言
-
-只影响这一次、不写回配置：
-
-```bash
-cmdgen --lang zh "列出所有 docker 容器"
-cmdgen --lang en --help
-```
-
-`en-US` 视为 `en`，`zh-CN` 和 `zh-Hans` 视为 `zh`。环境变量 `CMDGEN_LANG` 作用相同。持久默认写在 `config.toml` 的 `language`。优先级：
-
-1. `--lang`
-2. `CMDGEN_LANG`
-3. `language`
-4. 内置 `en`
-
-Ctrl+G 调用 cmdgen 时不会带 `--lang`，快捷键路径读到的是配置文件里的 `language`。`cmdgen config init` 会写入 `language`：有 `--lang` 或 `CMDGEN_LANG` 时用那个值，否则写 `en`。未知语言代码用英文报错，并列出支持的代码。
-
 ## 它做什么
 
 - 把描述变成一条命令。标准输出里只有这行命令，可以直接管道接走。
@@ -316,6 +298,24 @@ cmdgen doctor
 | 缺少 Key、超时、HTTP/API 错误、响应无法解析、配置错误 | 空 | 界面语言的说明，不含 Key | 非零 |
 
 调试栈信息只在设置 `CMDGEN_DEBUG` 时出现。
+
+## 界面语言
+
+只影响这一次、不写回配置：
+
+```bash
+cmdgen --lang zh "列出所有 docker 容器"
+cmdgen --lang en --help
+```
+
+`en-US` 视为 `en`，`zh-CN` 和 `zh-Hans` 视为 `zh`。环境变量 `CMDGEN_LANG` 作用相同。持久默认写在 `config.toml` 的 `language`。优先级：
+
+1. `--lang`
+2. `CMDGEN_LANG`
+3. `language`
+4. 内置 `en`
+
+Ctrl+G 调用 cmdgen 时不会带 `--lang`，快捷键路径读到的是配置文件里的 `language`。`cmdgen config init` 会写入 `language`：有 `--lang` 或 `CMDGEN_LANG` 时用那个值，否则写 `en`。未知语言代码用英文报错，并列出支持的代码。
 
 ## 安全
 

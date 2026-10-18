@@ -35,24 +35,6 @@ The result is printed to standard output, or written back into the Zsh / Bash in
 
 The interface language defaults to English. Errors and diagnostics go to standard error and follow the current interface language.
 
-## Language
-
-These choices apply only to this run and are not written back to the config:
-
-```bash
-cmdgen --lang zh "list every docker container"
-cmdgen --lang en --help
-```
-
-`en-US` is treated as `en`. `zh-CN` and `zh-Hans` are treated as `zh`. The `CMDGEN_LANG` environment variable works the same way. A persistent default lives in `language` in `config.toml`. Priority:
-
-1. `--lang`
-2. `CMDGEN_LANG`
-3. `language`
-4. built-in `en`
-
-Ctrl+G invokes cmdgen without `--lang`, so the shortcut path uses `language` from the config file. `cmdgen config init` writes `language`: the value of `--lang` or `CMDGEN_LANG` when one of those is set, otherwise `en`. An unknown language code is reported in English, with the supported codes listed.
-
 ## What it does
 
 - Turns a description into one command. Standard output is only that command, so it can be piped.
@@ -316,6 +298,24 @@ It checks the config, key source, credential store, API reachability, and integr
 | Missing key, timeout, HTTP/API error, unparseable response, config error | empty | an explanation in the interface language, with no key | non-zero |
 
 A debug stack appears only when `CMDGEN_DEBUG` is set.
+
+## Language
+
+These choices apply only to this run and are not written back to the config:
+
+```bash
+cmdgen --lang zh "list every docker container"
+cmdgen --lang en --help
+```
+
+`en-US` is treated as `en`. `zh-CN` and `zh-Hans` are treated as `zh`. The `CMDGEN_LANG` environment variable works the same way. A persistent default lives in `language` in `config.toml`. Priority:
+
+1. `--lang`
+2. `CMDGEN_LANG`
+3. `language`
+4. built-in `en`
+
+Ctrl+G invokes cmdgen without `--lang`, so the shortcut path uses `language` from the config file. `cmdgen config init` writes `language`: the value of `--lang` or `CMDGEN_LANG` when one of those is set, otherwise `en`. An unknown language code is reported in English, with the supported codes listed.
 
 ## Security
 
