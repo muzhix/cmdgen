@@ -42,7 +42,7 @@ fn managed_block_is_idempotent_and_uninstall_keeps_user_lines() {
 fn broken_marker_is_not_rewritten() {
     let broken = format!("{MANAGED_BEGIN}\nsource old\nexport KEEP=1\n");
     let err = upsert_managed_block(&broken, "source x").unwrap_err();
-    assert!(err.to_string().contains("不完整"));
+    assert!(err.to_string().contains("incomplete"));
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn cli_install_and_uninstall_are_idempotent() {
         .args(["shell", "install", "zsh"])
         .assert()
         .success()
-        .stdout(contains("未重复修改"));
+        .stdout(contains("left unchanged"));
     let rc = fs::read_to_string(sandbox.home.join(".zshrc")).unwrap();
     assert_eq!(rc.matches(MANAGED_BEGIN).count(), 1);
     sandbox
@@ -114,9 +114,21 @@ fn cli_install_and_uninstall_are_idempotent() {
         .args(["shell", "uninstall", "zsh"])
         .assert()
         .success()
-        .stdout(contains("已卸载"));
+        .stdout(contains("uninstalled"));
     let rc = fs::read_to_string(sandbox.home.join(".zshrc")).unwrap();
     assert!(!rc.contains(MANAGED_BEGIN));
+
+    sandbox
+        .command()
+        .args(["shell", "install", "zsh"])
+        .assert()
+        .success();
+    sandbox
+        .command()
+        .args(["shell", "uninstall", "zsh", "--lang", "zh"])
+        .assert()
+        .success()
+        .stdout(contains("已卸载"));
 }
 
 #[test]

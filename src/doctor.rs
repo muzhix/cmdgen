@@ -5,6 +5,7 @@ use crate::config::{
 use crate::error::Error;
 use crate::fsutil;
 use crate::generator::client::{completions_endpoint, probe_reachable};
+use crate::i18n::{self, fill};
 use crate::shell::detect::{os_label, resolve_shell};
 use crate::shell::integration::{integration_is_broken, integration_state, IntegrationShell};
 
@@ -34,13 +35,14 @@ impl Report {
     }
 
     pub fn render(&self) -> String {
-        let mut out = String::from("cmdgen doctor\n\n");
+        let m = i18n::t();
+        let mut out = String::from(m.doctor_title);
         for check in &self.checks {
             out.push_str(match check.level {
-                Level::Pass => "[通过] ",
-                Level::Warn => "[警告] ",
-                Level::Fail => "[失败] ",
-                Level::Info => "[信息] ",
+                Level::Pass => m.level_pass,
+                Level::Warn => m.level_warn,
+                Level::Fail => m.level_fail,
+                Level::Info => m.level_info,
             });
             out.push_str(&check.name);
             out.push('\n');
@@ -51,9 +53,9 @@ impl Report {
             }
         }
         out.push_str(if self.has_failure() {
-            "\n结果: 存在需要处理的问题\n"
+            m.result_bad
         } else {
-            "\n结果: 可用\n"
+            m.result_ok
         });
         out
     }
@@ -78,17 +80,21 @@ pub fn diagnose(
     )?;
     let mut checks = Vec::new();
 
+    let m = i18n::t();
     checks.push(if config.config_exists {
         Check {
             level: Level::Pass,
-            name: "配置文件".into(),
+            name: m.check_config.into(),
             detail: config.config_path.display().to_string(),
         }
     } else {
         Check {
             level: Level::Warn,
-            name: "配置文件".into(),
-            detail: format!("{} 不存在，使用内置默认值。", config.config_path.display()),
+            name: m.check_config.into(),
+            detail: fill(
+                m.check_config_missing,
+                &[("path", &config.config_path.display().to_string())],
+            ),
         }
     });
 
@@ -97,29 +103,38 @@ pub fn diagnose(
             if mode & 0o077 != 0 {
                 checks.push(Check {
                     level: Level::Warn,
-                    name: "配置文件权限".into(),
-                    detail: format!("当前权限为 {mode:o}，建议设为 600。"),
+                    name: i18n::t().check_perms.into(),
+                    detail: fill(
+                        i18n::t().check_perms_detail,
+                        &[("mode", &format!("{mode:o}"))],
+                    ),
                 });
             }
         }
     }
 
+    let m = i18n::t();
     checks.push(Check {
         level: Level::Pass,
-        name: "Provider".into(),
-        detail: format!(
-            "name={} model={}\nbase_url={}\n已配置: {}",
-            config.provider_name,
-            config.model,
-            config.base_url,
-            configured_names(&config)
+        name: m.check_provider.into(),
+        detail: fill(
+            m.check_provider_detail,
+            &[
+                ("name", &config.provider_name),
+                ("model", &config.model),
+                ("base_url", &config.base_url),
+                ("configured", &configured_names(&config)),
+            ],
         ),
     });
 
     checks.push(Check {
         level: Level::Info,
-        name: "运行环境".into(),
-        detail: format!("os={} shell={shell}", os_label()),
+        name: m.check_runtime.into(),
+        detail: fill(
+            m.check_runtime_detail,
+            &[("os", os_label()), ("shell", &shell)],
+        ),
     });
 
     let credentials = CredentialFile::from_env(&env)?;
@@ -132,12 +147,15 @@ pub fn diagnose(
     ) {
         Ok(key) => checks.push(Check {
             level: Level::Pass,
-            name: "API Key".into(),
-            detail: format!("{}（已脱敏，不显示内容）", key.source_label),
+            name: i18n::t().check_key.into(),
+            detail: fill(
+                i18n::t().check_key_redacted,
+                &[("source", &key.source_label)],
+            ),
         }),
         Err(err) => checks.push(Check {
             level: Level::Fail,
-            name: "API Key".into(),
+            name: i18n::t().check_key.into(),
             detail: err.to_string(),
         }),
     }
@@ -145,15 +163,13 @@ pub fn diagnose(
     match crate::config::secrets::keyring_status() {
         Ok(()) => checks.push(Check {
             level: Level::Pass,
-            name: "凭据存储".into(),
-            detail: "可以查询系统凭据存储。未显示任何 Key。".into(),
+            name: i18n::t().check_store.into(),
+            detail: i18n::t().check_store_ok.into(),
         }),
         Err(reason) => checks.push(Check {
             level: Level::Warn,
-            name: "凭据存储".into(),
-            detail: format!(
-                "当前不可用: {reason}\n仍可使用环境变量 CMDGEN_API_KEY。若本地凭据文件中已有 Key，生成命令时仍会读取。"
-            ),
+            name: i18n::t().check_store.into(),
+            detail: fill(i18n::t().check_store_bad, &[("reason", &reason)]),
         }),
     }
 
@@ -175,7 +191,7 @@ pub fn diagnose(
     }
     checks.push(Check {
         level: if broken { Level::Fail } else { Level::Info },
-        name: "Shell 集成".into(),
+        name: i18n::t().check_shell.into(),
         detail: integration_lines.join("\n"),
     });
 
@@ -184,7 +200,7 @@ pub fn diagnose(
 
 fn configured_names(config: &crate::config::EffectiveConfig) -> String {
     if config.configured_providers.is_empty() {
-        "（无）".to_string()
+        i18n::t().configured_none.to_string()
     } else {
         config
             .configured_providers
@@ -199,14 +215,14 @@ fn network_check(base_url: &str, timeout_secs: u64, probe_network: bool) -> Chec
     if !probe_network {
         return Check {
             level: Level::Info,
-            name: "网络".into(),
-            detail: "已跳过连通性检查。".into(),
+            name: i18n::t().check_network.into(),
+            detail: i18n::t().network_skipped.into(),
         };
     }
     if let Err(err) = completions_endpoint(base_url) {
         return Check {
             level: Level::Fail,
-            name: "网络".into(),
+            name: i18n::t().check_network.into(),
             detail: err.to_string(),
         };
     }
@@ -214,12 +230,15 @@ fn network_check(base_url: &str, timeout_secs: u64, probe_network: bool) -> Chec
     match probe_reachable(base_url, timeout) {
         Ok(status) => Check {
             level: Level::Pass,
-            name: "网络".into(),
-            detail: format!("可以访问 {base_url}（HTTP {status}）。未发送 API Key。"),
+            name: i18n::t().check_network.into(),
+            detail: fill(
+                i18n::t().network_ok,
+                &[("base_url", base_url), ("status", &status.to_string())],
+            ),
         },
         Err(err) => Check {
             level: Level::Fail,
-            name: "网络".into(),
+            name: i18n::t().check_network.into(),
             detail: err.to_string(),
         },
     }

@@ -1,4 +1,5 @@
 use crate::error::Error;
+use crate::i18n::{self, fill};
 
 pub fn os_label() -> &'static str {
     match std::env::consts::OS {
@@ -62,7 +63,7 @@ fn validate_shell_name(name: &str) -> Result<(), Error> {
     } else {
         Err(Error::InvalidConfig {
             path: "shell".into(),
-            reason: format!("无法识别的 shell: {name}"),
+            reason: fill(i18n::t().err_shell_name, &[("name", name)]),
         })
     }
 }

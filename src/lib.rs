@@ -6,6 +6,7 @@ pub mod doctor;
 pub mod error;
 mod fsutil;
 pub mod generator;
+pub mod i18n;
 pub mod shell;
 
 pub use error::Error;

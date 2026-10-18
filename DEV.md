@@ -53,3 +53,16 @@ python3 docs/demo/record.py
 ## 内置模型名
 
 `deepseek-flash` 于 2026-10-17 对照 DeepSeek 官方文档核对。`qwen3.8-flash` 于 2026-10-17 对照百炼文本生成文档核对。它们不是永久有效的常量。如果官方更换模型名，请同时修改内置预设、README 和这里的说明。
+
+## 界面语言
+
+用户可见文案在 `src/i18n/`。一种语言一个文件，共用 `Messages`。漏字段会在编译期失败。
+
+加一种语言时：
+
+1. 在 `src/i18n/mod.rs` 的 `Lang` 里增加枚举值，并在 `messages()` 里加一个分支。
+2. 新建 `src/i18n/<code>.rs`，填满与 `en.rs` 相同的 `Messages`。
+3. 在 `parse_lang_code` 里接受新的语言代码（以及需要的别名）。
+4. 补一条 `--lang <code> --help` 测试。
+
+不要改发给模型的系统提示（`src/generator/prompt.rs`），也不要改 `src/generator/output.rs` 里用来识别「以下是 / 命令如下」这类说明文字的中文片段。`install.sh` 和 Shell 集成脚本里的按键行为也不要为了界面语言去改。

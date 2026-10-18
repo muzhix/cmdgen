@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 use crate::fsutil;
+use crate::i18n::{self, fill};
 
 pub const MANAGED_BEGIN: &str = "# >>> cmdgen managed integration >>>";
 pub const MANAGED_END: &str = "# <<< cmdgen managed integration <<<";
@@ -64,23 +65,14 @@ pub fn parse_keybinding(input: &str) -> Result<KeyBinding, Error> {
         .or_else(|| normalized.strip_prefix("control-"))
         .or_else(|| normalized.strip_prefix("c-"));
     let Some(letter) = letter else {
-        return Err(Error::InvalidConfig {
-            path: "shell.keybinding".into(),
-            reason: format!("暂仅支持 ctrl-<字母>，收到 {input}"),
-        });
+        return Err(invalid_keybinding(input));
     };
     let mut chars = letter.chars();
     let Some(ch) = chars.next() else {
-        return Err(Error::InvalidConfig {
-            path: "shell.keybinding".into(),
-            reason: format!("暂仅支持 ctrl-<字母>，收到 {input}"),
-        });
+        return Err(invalid_keybinding(input));
     };
     if chars.next().is_some() || !ch.is_ascii_alphabetic() {
-        return Err(Error::InvalidConfig {
-            path: "shell.keybinding".into(),
-            reason: format!("暂仅支持 ctrl-<字母>，收到 {input}"),
-        });
+        return Err(invalid_keybinding(input));
     }
     let upper = ch.to_ascii_uppercase();
     let lower = ch.to_ascii_lowercase();
@@ -90,6 +82,13 @@ pub fn parse_keybinding(input: &str) -> Result<KeyBinding, Error> {
         bash: format!("\\C-{lower}"),
         display: format!("Ctrl+{upper}"),
     })
+}
+
+fn invalid_keybinding(input: &str) -> Error {
+    Error::InvalidConfig {
+        path: "shell.keybinding".into(),
+        reason: fill(i18n::t().err_keybinding, &[("input", input)]),
+    }
 }
 
 #[derive(Debug)]
@@ -187,7 +186,7 @@ pub fn uninstall(
 pub fn upsert_managed_block(original: &str, source_line: &str) -> Result<String, Error> {
     if source_line.contains('\n') {
         return Err(Error::ShellIntegrationError(
-            "source 行不能包含换行。".into(),
+            i18n::t().err_source_newline.into(),
         ));
     }
     let block = format!("{MANAGED_BEGIN}\n{source_line}\n{MANAGED_END}\n");
@@ -233,18 +232,28 @@ pub fn integration_state(home: &Path, config_dir: &Path, shell: IntegrationShell
     let rc = read_optional(&rc_path).unwrap_or_default();
     let marked = rc.contains(MANAGED_BEGIN) && rc.contains(MANAGED_END);
     match (marked, script_path.exists()) {
-        (true, true) => format!("{}: 已安装 ({})", shell.as_str(), rc_path.display()),
-        (true, false) => format!(
-            "{}: 配置中有集成标记，但脚本不存在 ({})",
-            shell.as_str(),
-            script_path.display()
+        (true, true) => fill(
+            i18n::t().state_installed,
+            &[
+                ("shell", shell.as_str()),
+                ("path", &rc_path.display().to_string()),
+            ],
         ),
-        (false, true) => format!(
-            "{}: 脚本存在，但 {} 中没有集成标记",
-            shell.as_str(),
-            rc_path.display()
+        (true, false) => fill(
+            i18n::t().state_mark_no_script,
+            &[
+                ("shell", shell.as_str()),
+                ("path", &script_path.display().to_string()),
+            ],
         ),
-        (false, false) => format!("{}: 未安装", shell.as_str()),
+        (false, true) => fill(
+            i18n::t().state_script_no_mark,
+            &[
+                ("shell", shell.as_str()),
+                ("path", &rc_path.display().to_string()),
+            ],
+        ),
+        (false, false) => fill(i18n::t().state_absent, &[("shell", shell.as_str())]),
     }
 }
 
@@ -265,7 +274,7 @@ fn block_span(original: &str) -> Result<Option<(usize, usize)>, Error> {
             start + MANAGED_BEGIN.len() + rel + MANAGED_END.len(),
         ))),
         _ => Err(Error::ShellIntegrationError(
-            "配置文件中的 cmdgen 标记不完整，已停止修改以免破坏原有内容。".into(),
+            i18n::t().err_marker_incomplete.into(),
         )),
     }
 }
@@ -285,7 +294,7 @@ fn render_script(shell: IntegrationShell, binding: &KeyBinding) -> Result<String
         .replace(placeholder, sequence);
     if script.contains("__CMDGEN_") {
         return Err(Error::ShellIntegrationError(
-            "集成脚本模板替换不完整。".into(),
+            i18n::t().err_template_incomplete.into(),
         ));
     }
     Ok(script)
@@ -303,8 +312,15 @@ fn read_optional(path: &Path) -> Result<String, Error> {
     if !path.exists() {
         return Ok(String::new());
     }
-    fsutil::read_to_string(path)
-        .map_err(|err| Error::ShellIntegrationError(format!("无法读取 {}: {err}", path.display())))
+    fsutil::read_to_string(path).map_err(|err| {
+        Error::ShellIntegrationError(fill(
+            i18n::t().err_cannot_read,
+            &[
+                ("path", &path.display().to_string()),
+                ("detail", &err.to_string()),
+            ],
+        ))
+    })
 }
 
 fn write_rc(path: &Path, updated: &str) -> Result<bool, Error> {
@@ -386,10 +402,9 @@ fn foreign_binding_warning(
         }
     });
     if conflict {
-        Some(format!(
-            "检测到 {} 中已有 {} 绑定。cmdgen 仍会安装，建议在配置里把 shell.keybinding 改成其他按键后重新安装。",
-            shell.rc_name(),
-            binding.display
+        Some(fill(
+            i18n::t().binding_warning,
+            &[("path", shell.rc_name()), ("binding", &binding.display)],
         ))
     } else {
         None

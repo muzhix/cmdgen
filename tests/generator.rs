@@ -97,7 +97,7 @@ fn output_normalization_keeps_multiline_commands_and_rejects_prose() {
     assert!(normalize_command("   \n").is_err());
     assert!(normalize_command("```\n\n```").is_err());
     let prose = normalize_command("Here is the command:\ndocker ps -a").unwrap_err();
-    assert!(prose.to_string().contains("解释"));
+    assert!(prose.to_string().contains("explanation"));
     assert!(normalize_command("以下是命令\nls").is_err());
 }
 
