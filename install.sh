@@ -7,7 +7,7 @@
 # 需要能在 macOS 自带的 bash 3.2 下通过管道执行。
 
 if [ -z "${BASH_VERSION:-}" ]; then
-  echo "请使用 bash 运行这个脚本：curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash" >&2
+  echo "Run this script with bash: curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash" >&2
   exit 1
 fi
 
@@ -25,28 +25,28 @@ info() {
 }
 
 warn() {
-  printf '警告：%s\n' "$*" >&2
+  printf 'warning: %s\n' "$*" >&2
 }
 
 die() {
-  printf '错误：%s\n' "$*" >&2
+  printf 'error: %s\n' "$*" >&2
   exit 1
 }
 
 usage() {
   cat >&2 <<'EOF'
-用法：
+Usage:
   curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash
   curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash -s -- --version v0.1.1
   curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bash -s -- --uninstall
 
-环境变量：
-  CMDGEN_BIN_DIR           安装目录。默认选一个已在 PATH 中且当前用户可写的目录
-  CMDGEN_VERSION           版本，例如 v0.1.1。默认安装最新版
-  CMDGEN_REPO              GitHub 仓库，默认 muzhix/cmdgen
-  CMDGEN_RELEASE_BASE_URL  直接指定放有压缩包的目录，供测试使用
+Environment:
+  CMDGEN_BIN_DIR           Install directory. Defaults to a writable directory already on PATH.
+  CMDGEN_VERSION           Release, for example v0.1.1. Defaults to the latest release.
+  CMDGEN_REPO              GitHub repository. Defaults to muzhix/cmdgen.
+  CMDGEN_RELEASE_BASE_URL  Directory that holds the archives. Used by tests.
 
-脚本只复制 cmdgen 可执行文件，不修改 shell 启动文件。
+The script copies only the cmdgen binary. It does not edit shell startup files.
 EOF
 }
 
@@ -65,7 +65,7 @@ normalize_version() {
     return
   fi
   case "$version" in
-    *[!A-Za-z0-9._-]*) die "版本号无效：$version" ;;
+    *[!A-Za-z0-9._-]*) die "invalid version: $version" ;;
   esac
   case "$version" in
     v*) printf '%s\n' "$version" ;;
@@ -125,14 +125,14 @@ triple_for() {
   case "$os" in
     Darwin|darwin) os_norm="apple-darwin" ;;
     Linux|linux) os_norm="unknown-linux-gnu" ;;
-    MINGW*|MSYS*|CYGWIN*) die "Windows 不在支持范围内。" ;;
-    *) die "不支持的操作系统：$os" ;;
+    MINGW*|MSYS*|CYGWIN*) die "Windows is not supported." ;;
+    *) die "unsupported operating system: $os" ;;
   esac
 
   case "$arch" in
     x86_64|amd64|x64) arch_norm="x86_64" ;;
     aarch64|arm64) arch_norm="aarch64" ;;
-    *) die "不支持的架构：$arch" ;;
+    *) die "unsupported architecture: $arch" ;;
   esac
 
   printf '%s-%s\n' "$arch_norm" "$os_norm"
@@ -148,11 +148,11 @@ assert_glibc_linux() {
     return 0
   fi
   if [ -f /etc/alpine-release ]; then
-    die "当前系统使用 musl（Alpine）。发布包链接的是 glibc，不能在这里运行。"
+    die "This system uses musl (Alpine). Release binaries link against glibc and cannot run here."
   fi
   if command -v ldd >/dev/null 2>&1; then
     if ldd --version 2>&1 | grep -qi musl; then
-      die "当前系统使用 musl。发布包链接的是 glibc，不能在这里运行。"
+      die "This system uses musl. Release binaries link against glibc and cannot run here."
     fi
   fi
 }
@@ -165,7 +165,7 @@ release_base_url() {
   local repo="${CMDGEN_REPO:-$CMDGEN_REPO_DEFAULT}"
   case "$repo" in
     */*) ;;
-    *) die "CMDGEN_REPO 应为 owner/name，当前是：$repo" ;;
+    *) die "CMDGEN_REPO must be owner/name, got: $repo" ;;
   esac
   if [ -n "$REQUESTED_VERSION" ]; then
     printf 'https://github.com/%s/releases/download/%s\n' "$repo" "$REQUESTED_VERSION"
@@ -200,7 +200,7 @@ fetch_url() {
     wget -q -O "$dest" --timeout=180 "$url"
     return $?
   fi
-  die "需要 curl 或 wget 才能下载。"
+  die "curl or wget is required to download."
 }
 
 sha256_file() {
@@ -213,7 +213,7 @@ sha256_file() {
     shasum -a 256 "$file" | awk '{ print $1 }'
     return
   fi
-  die "需要 sha256sum 或 shasum 来校验下载文件。"
+  die "sha256sum or shasum is required to verify the download."
 }
 
 verify_sha256() {
@@ -230,13 +230,13 @@ verify_sha256() {
     base($2) == name { print $1; exit }
   ' "$sums")
   if [ -z "$expected" ]; then
-    die "校验文件里没有 $asset"
+    die "checksum file has no entry for $asset"
   fi
   actual=$(sha256_file "$file")
   expected=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
   actual=$(printf '%s' "$actual" | tr 'A-F' 'a-f')
   if [ "$expected" != "$actual" ]; then
-    die "校验失败：${asset} 的 sha256 是 ${actual}，发布记录里是 ${expected}"
+    die "checksum mismatch for ${asset}: got ${actual}, release record has ${expected}"
   fi
 }
 
@@ -273,13 +273,13 @@ has_integration_marker() {
 prepare_bin_dir() {
   local dir="$1"
   if [ -e "$dir" ] && [ ! -d "$dir" ]; then
-    die "安装位置不是目录：$dir"
+    die "install location is not a directory: $dir"
   fi
   if [ ! -d "$dir" ]; then
-    mkdir -p "$dir" || die "无法创建安装目录：$dir"
+    mkdir -p "$dir" || die "cannot create install directory: $dir"
   fi
   if [ ! -w "$dir" ]; then
-    die "没有写入权限：${dir}。可以设置 CMDGEN_BIN_DIR 换一个目录。"
+    die "no write permission for ${dir}. Set CMDGEN_BIN_DIR to choose another directory."
   fi
 }
 
@@ -293,40 +293,40 @@ install_cmdgen() {
   dest=$(choose_bin_dir)
   prepare_bin_dir "$dest"
 
-  info "目标：$triple"
+  info "target: $triple"
   if [ -n "$REQUESTED_VERSION" ]; then
-    info "版本：$REQUESTED_VERSION"
+    info "version: $REQUESTED_VERSION"
   else
-    info "版本：最新"
+    info "version: latest"
   fi
 
   tarball="$tmpdir/$asset"
-  info "正在下载 $asset"
+  info "downloading $asset"
   fetch_url "$base/$asset" "$tarball"
 
   sums="$tmpdir/SHA256SUMS"
   if fetch_url "$base/SHA256SUMS" "$sums" 2>"$tmpdir/sums.err"; then
     verify_sha256 "$tarball" "$sums" "$asset"
-    info "已校验 sha256"
+    info "verified sha256"
   else
     rm -f "$sums"
-    warn "这个版本没有 SHA256SUMS，已跳过校验。"
+    warn "this release has no SHA256SUMS; skipped checksum verification."
   fi
 
   tar -tzf "$tarball" >"$tmpdir/listing"
   member=$(archive_member "$tmpdir/listing")
   if [ -z "$member" ]; then
-    die "压缩包里没有 cmdgen 可执行文件。"
+    die "archive does not contain the cmdgen executable."
   fi
   case "$member" in
-    *..*) die "压缩包路径不安全：$member" ;;
+    *..*) die "unsafe path in archive: $member" ;;
   esac
 
   mkdir -p "$tmpdir/extract"
   tar -xzf "$tarball" -C "$tmpdir/extract" "$member"
   src="$tmpdir/extract/$member"
   if [ ! -f "$src" ]; then
-    die "解压后找不到 $member"
+    die "extracted file not found: $member"
   fi
 
   staged_bin=$(mktemp "$dest/cmdgen.XXXXXX")
@@ -337,33 +337,33 @@ install_cmdgen() {
 
   if ! "$dest/cmdgen" --version >"$tmpdir/version.out" 2>"$tmpdir/version.err"; then
     rm -f "$dest/cmdgen"
-    die "安装后的 cmdgen 无法运行：$(cat "$tmpdir/version.err")"
+    die "installed cmdgen failed to run: $(cat "$tmpdir/version.err")"
   fi
 
   version_line=$(head -n 1 "$tmpdir/version.out")
-  info "已安装 ${version_line:-cmdgen}"
-  info "位置：$dest/cmdgen"
+  info "installed ${version_line:-cmdgen}"
+  info "location: $dest/cmdgen"
 
   if on_path "$dest"; then
-    info "当前 PATH 可以找到这个目录。新开的终端里直接运行 cmdgen。"
+    info "This directory is on PATH. Open a new terminal and run cmdgen."
   else
-    info "这个目录不在 PATH 里。把下面一行加到 shell 启动文件后，重新打开终端："
+    info "This directory is not on PATH. Add the line below to your shell startup file, then open a new terminal:"
     case "$dest" in
       "$HOME/.local/bin") info '  export PATH="$HOME/.local/bin:$PATH"' ;;
       "$HOME/bin") info '  export PATH="$HOME/bin:$PATH"' ;;
       *) info "  export PATH=\"$dest:\$PATH\"" ;;
     esac
     case "$(basename "${SHELL:-}")" in
-      zsh) info "启动文件一般是 ~/.zshrc" ;;
-      bash) info "启动文件一般是 ~/.bashrc" ;;
+      zsh) info "The startup file is usually ~/.zshrc." ;;
+      bash) info "The startup file is usually ~/.bashrc." ;;
     esac
   fi
 
   info ""
-  info "下一步："
+  info "Next:"
   info "  cmdgen config set-key"
   info ""
-  info "Shell 快捷键不会写入启动文件。需要时再运行："
+  info "Shell keybindings are not written into startup files. To add them, run:"
   info "  cmdgen shell install zsh"
 }
 
@@ -373,21 +373,21 @@ uninstall_cmdgen() {
   bin="$dest/cmdgen"
 
   if [ -e "$bin" ] && has_integration_marker; then
-    die "检测到 Shell 集成仍在 ~/.zshrc 或 ~/.bashrc。请先运行 cmdgen shell uninstall，再卸载二进制。"
+    die "Shell integration is still present in ~/.zshrc or ~/.bashrc. Run \`cmdgen shell uninstall\` before removing the binary."
   fi
 
   if [ -e "$bin" ]; then
     rm -f "$bin"
-    info "已删除 $bin"
+    info "removed $bin"
   else
-    info "未找到 $bin"
+    info "not found: $bin"
   fi
 
   if has_integration_marker; then
-    die "启动文件里还有 cmdgen 集成标记，但这里已经没有可执行文件。请手工删除 # >>> cmdgen managed integration >>> 与 # <<< cmdgen managed integration <<< 之间的内容。"
+    die "A cmdgen integration marker remains in a startup file, but the binary is already gone. Delete the block between \`# >>> cmdgen managed integration >>>\` and \`# <<< cmdgen managed integration <<<\` by hand."
   fi
 
-  info "配置和凭据仍留在配置目录，这次没有删除。"
+  info "Config and credentials were left in the config directory."
 }
 
 parse_args() {
@@ -399,7 +399,7 @@ parse_args() {
       --version)
         shift
         if [ $# -eq 0 ] || [ -z "${1:-}" ]; then
-          die "--version 需要一个版本号"
+          die "--version requires a version"
         fi
         REQUESTED_VERSION="$1"
         ;;
@@ -411,7 +411,7 @@ parse_args() {
         exit 0
         ;;
       *)
-        die "未知参数：$1"
+        die "unknown argument: $1"
         ;;
     esac
     shift
@@ -421,7 +421,7 @@ parse_args() {
 
 main() {
   if [ -z "${HOME:-}" ]; then
-    die "没有 HOME，无法选择安装目录。"
+    die "HOME is unset, so an install directory cannot be chosen."
   fi
   parse_args "$@"
   tmpdir=$(mktemp -d)
@@ -429,7 +429,7 @@ main() {
   case "$ACTION" in
     install) install_cmdgen ;;
     uninstall) uninstall_cmdgen ;;
-    *) die "未知动作：$ACTION" ;;
+    *) die "unknown action: $ACTION" ;;
   esac
 }
 

@@ -97,8 +97,8 @@ if [ "$status" -ne 0 ]; then
   printf '%s\n' "$output" >&2
   fail "安装失败，退出码 $status"
 fi
-printf '%s\n' "$output" | grep -F -q "已安装 cmdgen 9.9.9" || fail "安装成功信息缺失：$output"
-printf '%s\n' "$output" | grep -F -q "已校验 sha256" || fail "没有校验 sha256：$output"
+printf '%s\n' "$output" | grep -F -q "installed cmdgen 9.9.9" || fail "安装成功信息缺失：$output"
+printf '%s\n' "$output" | grep -F -q "verified sha256" || fail "没有校验 sha256：$output"
 [ -x "$bin_dir/cmdgen" ] || fail "二进制没有安装"
 assert_eq "$("$bin_dir/cmdgen" --version)" "cmdgen 9.9.9" "安装后的版本"
 
@@ -121,13 +121,13 @@ printf '0000000000000000000000000000000000000000000000000000000000000000  %s\n' 
 if run_installer v9.9.9 >/dev/null 2>"$work/bad.err"; then
   fail "错误的 sha256 不应该安装成功"
 fi
-grep -F -q "校验失败" "$work/bad.err" || fail "校验失败时没有说明原因：$(cat "$work/bad.err")"
+grep -F -q "checksum mismatch" "$work/bad.err" || fail "校验失败时没有说明原因：$(cat "$work/bad.err")"
 [ ! -e "$bin_dir/cmdgen" ] || fail "校验失败后仍留下了二进制"
 
 # 没有校验文件时仍可安装，但要明确提示。
 rm -f "$release/SHA256SUMS"
 loose_out=$(run_installer v9.9.9 2>&1)
-printf '%s\n' "$loose_out" | grep -F -q "已跳过校验" || fail "缺少校验文件时没有提示：$loose_out"
+printf '%s\n' "$loose_out" | grep -F -q "skipped checksum verification" || fail "缺少校验文件时没有提示：$loose_out"
 assert_eq "$("$bin_dir/cmdgen" --version)" "cmdgen 9.9.9" "跳过校验后的版本"
 
 # 有集成标记时拒绝删除二进制，避免用户无法再执行 shell uninstall。
@@ -140,7 +140,7 @@ grep -F -q "cmdgen shell uninstall" "$work/keep.err" || fail "没有提示先卸
 
 printf '# user rc\n' >"$home/.zshrc"
 remove_out=$(run_installer v9.9.9 --uninstall 2>&1)
-printf '%s\n' "$remove_out" | grep -F -q "已删除" || fail "卸载信息缺失：$remove_out"
+printf '%s\n' "$remove_out" | grep -F -q "removed " || fail "卸载信息缺失：$remove_out"
 [ ! -e "$bin_dir/cmdgen" ] || fail "卸载后二进制还在"
 assert_eq "$(cat "$home/.zshrc")" "# user rc" "卸载改写了 zshrc"
 
