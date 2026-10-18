@@ -39,6 +39,17 @@ curl -fsSL https://raw.githubusercontent.com/muzhix/cmdgen/main/install.sh | bas
 
 脚本只放置二进制，不修改 shell 启动文件。`bash tests/install_smoke.sh` 用本地压缩包覆盖安装、校验失败、卸载和管道执行，不访问网络。macOS 也可以用 `packaging/homebrew/cmdgen.rb` 作为 Homebrew tap 模板；发布前需要填入真实的下载地址和 sha256。
 
+## README 演示
+
+`docs/demo-shell.gif` 和 `docs/demo-cli.gif` 用本机的 release 二进制录制，Shell 集成也是安装器写出的脚本。模型是 `docs/demo/record.py` 里的本地兼容接口，按固定文案返回命令，这样画面可以复现，也不需要 API Key。
+
+```bash
+cargo build --release
+python3 docs/demo/record.py
+```
+
+需要 `zsh`、`ffmpeg`，以及 Python 包 `pillow`、`pyte`、`fonttools`。系统里要有 JetBrains Mono、Noto Sans CJK 和 DejaVu。
+
 ## 内置模型名
 
 `deepseek-flash` 于 2026-10-17 对照 DeepSeek 官方文档核对。`qwen3.8-flash` 于 2026-10-17 对照百炼文本生成文档核对。它们不是永久有效的常量。如果官方更换模型名，请同时修改内置预设、README 和这里的说明。
