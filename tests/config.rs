@@ -251,7 +251,7 @@ fn missing_key_message_mentions_file_fallback() {
     let text = err.to_string();
     assert!(text.contains("CMDGEN_API_KEY"));
     assert!(text.contains("DEEPSEEK_API_KEY"));
-    assert!(text.contains("set-key"));
+    assert!(text.contains("config provider"));
     assert!(text.contains("credentials.toml"));
 
     let Err(err) = resolve("deepseek", &EnvMap::new(), &UnavailableStore, &file) else {

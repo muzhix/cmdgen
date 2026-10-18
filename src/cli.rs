@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal, Write};
 use std::sync::mpsc;
@@ -6,15 +8,16 @@ use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::KeyCode;
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 use crate::config::{
     activate_provider, config_dir, config_path, delete_api_key, home_dir, init_config,
-    key_status_from, load_config, load_effective, render_providers, resolve_api_key, save_api_key,
-    set_language, update_provider, CredentialFile, EnvMap, InitOutcome, KeyringStore, Overrides,
-    SavedKey,
+    key_status_from, load_config, load_effective, normalize_provider, provider_file_has_content,
+    render_providers, resolve_api_key, save_api_key, set_language, update_provider, CredentialFile,
+    EnvMap, FileConfig, InitOutcome, KeyringStore, Overrides, SavedKey, BAILIAN_BASE_URL,
+    BAILIAN_MODEL, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
 };
 use crate::doctor;
 use crate::error::Error;
@@ -114,16 +117,8 @@ enum ConfigCommand {
     },
     /// Choose the interface language with the arrow keys and write it to the config file
     Lang,
-    /// Write --model or --base-url to the config file. With no --provider, update the current active provider
-    Set,
-    /// Read an API key without echoing it. Prefer the system credential store; otherwise write the local credential file
-    SetKey,
-    /// Delete the current provider's API key from the system credential store and the local credential file
-    DeleteKey {
-        /// Skip the confirmation prompt
-        #[arg(long)]
-        yes: bool,
-    },
+    /// Edit one provider's model, base URL, or API key. `config providers` only lists them
+    Provider,
 }
 
 #[derive(Debug, Subcommand)]
@@ -262,14 +257,9 @@ fn localized_command() -> clap::Command {
         let config = set_about(config, "providers", m.help_config_providers);
         let config = set_about(config, "use", m.help_config_use);
         let config = set_about(config, "lang", m.help_config_lang);
-        let config = set_about(config, "set", m.help_config_set);
-        let config = set_about(config, "set-key", m.help_config_set_key);
-        let config = set_about(config, "delete-key", m.help_config_delete_key);
-        let config = config.mut_subcommand("use", |use_cmd| {
+        let config = set_about(config, "provider", m.help_config_provider);
+        config.mut_subcommand("use", |use_cmd| {
             set_arg_help(use_cmd, "name", m.help_config_use_name)
-        });
-        config.mut_subcommand("delete-key", |delete| {
-            set_arg_help(delete, "yes", m.help_delete_key_yes)
         })
     });
     cmd.mut_subcommand("shell", |shell| {
@@ -551,105 +541,7 @@ fn config_command(overrides: &Overrides, action: ConfigCommand) -> Result<i32, E
             }
         }
         ConfigCommand::Lang => config_lang(&env),
-        ConfigCommand::Set => {
-            let path = config_path(&env)?;
-            match update_provider(
-                &path,
-                overrides.provider.as_deref(),
-                overrides.base_url.as_deref(),
-                overrides.model.as_deref(),
-            ) {
-                Ok(update) => {
-                    println!(
-                        "{}",
-                        fill(i18n::t().updated_provider, &[("name", &update.name)])
-                    );
-                    if let Some(url) = &update.base_url {
-                        println!("{}", fill(i18n::t().line_base_url, &[("url", url)]));
-                    }
-                    if let Some(model) = &update.model {
-                        println!("{}", fill(i18n::t().line_model, &[("model", model)]));
-                    }
-                    println!(
-                        "{}",
-                        fill(
-                            i18n::t().config_path_line,
-                            &[("path", &path.display().to_string())]
-                        )
-                    );
-                    Ok(0)
-                }
-                Err(Error::ConfigNotFound { .. }) => {
-                    Err(Error::Usage(i18n::t().err_no_config.into()))
-                }
-                Err(err) => Err(err),
-            }
-        }
-        ConfigCommand::SetKey => {
-            let config = load_effective(&env, overrides)?;
-            let secret = rpassword::prompt_password(i18n::t().prompt_api_key)
-                .map_err(|_| Error::Usage(i18n::t().err_hidden_input.into()))?;
-            let file = CredentialFile::from_env(&env)?;
-            match save_api_key(&config.provider_name, &secret, &KeyringStore, &file)? {
-                SavedKey::Keyring { removed_file_entry } => {
-                    println!(
-                        "{}",
-                        fill(
-                            i18n::t().saved_keyring,
-                            &[("account", &config.provider_name)]
-                        )
-                    );
-                    if removed_file_entry {
-                        println!("{}", i18n::t().removed_file_key);
-                    }
-                }
-                SavedKey::File { path } => {
-                    println!(
-                        "{}",
-                        fill(
-                            i18n::t().saved_file,
-                            &[("path", &path.display().to_string())]
-                        )
-                    );
-                    println!("{}", i18n::t().saved_file_mode);
-                }
-            }
-            Ok(0)
-        }
-        ConfigCommand::DeleteKey { yes } => {
-            let config = load_effective(&env, overrides)?;
-            if !yes && !confirm_delete()? {
-                println!("{}", i18n::t().cancelled);
-                return Ok(0);
-            }
-            let file = CredentialFile::from_env(&env)?;
-            let deleted = delete_api_key(&config.provider_name, &KeyringStore, &file)?;
-            match (deleted.keyring, deleted.file) {
-                (true, true) => println!(
-                    "{}",
-                    fill(
-                        i18n::t().deleted_both,
-                        &[("account", &config.provider_name)]
-                    )
-                ),
-                (true, false) => println!(
-                    "{}",
-                    fill(
-                        i18n::t().deleted_keyring,
-                        &[("account", &config.provider_name)]
-                    )
-                ),
-                (false, true) => println!(
-                    "{}",
-                    fill(
-                        i18n::t().deleted_file,
-                        &[("path", &file.path().display().to_string())]
-                    )
-                ),
-                (false, false) => unreachable!("任一侧未删除时 delete_api_key 会返回错误"),
-            }
-            Ok(0)
-        }
+        ConfigCommand::Provider => config_provider(&env),
     }
 }
 
@@ -847,61 +739,459 @@ const LANGUAGE_CHOICES: [(Lang, &str); 2] = [(Lang::En, "English (en)"), (Lang::
 
 /// 在 stderr 上画出语言菜单。`None` 表示用户取消，文件不会被修改。
 fn select_language(current: Lang) -> Result<Option<Lang>, Error> {
+    let labels: Vec<String> = LANGUAGE_CHOICES
+        .iter()
+        .map(|(_, label)| (*label).to_string())
+        .collect();
+    let default = LANGUAGE_CHOICES
+        .iter()
+        .position(|(lang, _)| *lang == current)
+        .unwrap_or(0);
+    let Some(index) = select_index(i18n::t().lang_menu_title, &labels, default)? else {
+        return Ok(None);
+    };
+    Ok(Some(LANGUAGE_CHOICES[index].0))
+}
+
+struct ProviderRow {
+    name: String,
+    base_url: String,
+    model: String,
+}
+
+fn config_provider(env: &EnvMap) -> Result<i32, Error> {
+    let path = config_path(env)?;
+    ensure_provider_editable(&path)?;
+    if !io::stdin().is_terminal() {
+        return Err(Error::Usage(i18n::t().err_provider_not_a_terminal.into()));
+    }
+    loop {
+        let file = load_config(&path)?;
+        let rows = provider_rows(&file);
+        let active = trimmed_active(&file);
+        let labels: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                if active.as_deref() == Some(row.name.as_str()) {
+                    fill(i18n::t().provider_current, &[("name", &row.name)])
+                } else {
+                    row.name.clone()
+                }
+            })
+            .collect();
+        let default = active
+            .as_ref()
+            .and_then(|name| rows.iter().position(|row| row.name == *name))
+            .unwrap_or(0);
+        let Some(index) = select_index(i18n::t().provider_menu_title, &labels, default)? else {
+            return Ok(0);
+        };
+        edit_provider_fields(env, &path, &rows[index].name)?;
+    }
+}
+
+fn ensure_provider_editable(path: &std::path::Path) -> Result<(), Error> {
+    let file = match load_config(path) {
+        Ok(file) => file,
+        Err(Error::ConfigNotFound { .. }) => {
+            return Err(Error::Usage(i18n::t().err_no_config.into()));
+        }
+        Err(err) => return Err(err),
+    };
+    if provider_file_has_content(&file.provider) && file.providers.is_empty() {
+        return Err(Error::invalid(path, i18n::t().err_legacy_only_edit));
+    }
+    Ok(())
+}
+
+fn provider_rows(file: &FileConfig) -> Vec<ProviderRow> {
+    let mut rows = Vec::new();
+    for (raw, profile) in &file.providers {
+        let Ok(name) = normalize_provider(raw) else {
+            continue;
+        };
+        if rows.iter().any(|row: &ProviderRow| row.name == name) {
+            continue;
+        }
+        rows.push(ProviderRow {
+            base_url: saved_or_preset(profile.base_url.as_deref(), preset_url(&name)),
+            model: saved_or_preset(profile.model.as_deref(), preset_model_of(&name)),
+            name,
+        });
+    }
+    for (name, url, model) in [
+        ("deepseek", DEEPSEEK_BASE_URL, DEEPSEEK_MODEL),
+        ("bailian", BAILIAN_BASE_URL, BAILIAN_MODEL),
+    ] {
+        if rows.iter().any(|row| row.name == name) {
+            continue;
+        }
+        rows.push(ProviderRow {
+            name: name.to_string(),
+            base_url: url.to_string(),
+            model: model.to_string(),
+        });
+    }
+    rows
+}
+
+fn saved_or_preset(saved: Option<&str>, preset: Option<&str>) -> String {
+    saved
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or(preset)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn preset_url(name: &str) -> Option<&'static str> {
+    match name {
+        "deepseek" => Some(DEEPSEEK_BASE_URL),
+        "bailian" => Some(BAILIAN_BASE_URL),
+        _ => None,
+    }
+}
+
+fn preset_model_of(name: &str) -> Option<&'static str> {
+    match name {
+        "deepseek" => Some(DEEPSEEK_MODEL),
+        "bailian" => Some(BAILIAN_MODEL),
+        _ => None,
+    }
+}
+
+fn trimmed_active(file: &FileConfig) -> Option<String> {
+    let raw = file.active.as_deref()?.trim();
+    if raw.is_empty() {
+        None
+    } else {
+        normalize_provider(raw).ok()
+    }
+}
+
+fn api_key_env_name(file: &FileConfig, name: &str) -> Option<String> {
+    let saved = file.providers.iter().find_map(|(key, profile)| {
+        let Ok(normalized) = normalize_provider(key) else {
+            return None;
+        };
+        (normalized == name).then(|| profile.api_key_env.clone())
+    });
+    if let Some(Some(value)) = saved {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    match name {
+        "deepseek" => Some("DEEPSEEK_API_KEY".to_string()),
+        "bailian" => Some("DASHSCOPE_API_KEY".to_string()),
+        _ => None,
+    }
+}
+
+fn edit_provider_fields(env: &EnvMap, path: &std::path::Path, name: &str) -> Result<(), Error> {
+    loop {
+        let file = load_config(path)?;
+        let Some(row) = provider_rows(&file)
+            .into_iter()
+            .find(|row| row.name == name)
+        else {
+            return Ok(());
+        };
+        let key_env = api_key_env_name(&file, name);
+        let key_status = key_status_label(env, name, key_env.as_deref());
+        let messages = i18n::t();
+        let items = vec![
+            format!("{}  {}", messages.field_model, row.model),
+            format!("{}  {}", messages.field_base_url, row.base_url),
+            format!("{}  {key_status}", messages.field_set_key),
+            messages.field_delete_key.to_string(),
+            messages.field_back.to_string(),
+        ];
+        let Some(index) = select_index(name, &items, 0)? else {
+            return Ok(());
+        };
+        match index {
+            0 => edit_model(path, name)?,
+            1 => edit_base_url(path, name)?,
+            2 => edit_api_key(env, name)?,
+            3 => delete_provider_key(env, name)?,
+            _ => return Ok(()),
+        }
+    }
+}
+
+fn key_status_label(env: &EnvMap, name: &str, api_key_env: Option<&str>) -> String {
+    let Ok(file) = CredentialFile::from_env(env) else {
+        return i18n::t().status_unconfigured.into();
+    };
+    let resolved = resolve_api_key(name, api_key_env, env, &KeyringStore, &file);
+    let status = key_status_from(resolved.as_ref());
+    if status.configured {
+        fill(
+            i18n::t().credentials_redacted,
+            &[("source", &status.source_label)],
+        )
+    } else {
+        status.source_label
+    }
+}
+
+fn edit_model(path: &std::path::Path, name: &str) -> Result<(), Error> {
+    let Some(model) = prompt_line(i18n::t().prompt_model)? else {
+        return Ok(());
+    };
+    match update_provider(path, Some(name), None, Some(&model)) {
+        Ok(update) => print_provider_update(&path.display().to_string(), &update),
+        Err(err) => eprintln!("cmdgen: {err}"),
+    }
+    Ok(())
+}
+
+fn edit_base_url(path: &std::path::Path, name: &str) -> Result<(), Error> {
+    let Some(url) = prompt_line(i18n::t().prompt_base_url)? else {
+        return Ok(());
+    };
+    match update_provider(path, Some(name), Some(&url), None) {
+        Ok(update) => print_provider_update(&path.display().to_string(), &update),
+        Err(err) => eprintln!("cmdgen: {err}"),
+    }
+    Ok(())
+}
+
+fn print_provider_update(path: &str, update: &crate::config::ProviderUpdate) {
+    println!(
+        "{}",
+        fill(i18n::t().updated_provider, &[("name", &update.name)])
+    );
+    if let Some(url) = &update.base_url {
+        println!("{}", fill(i18n::t().line_base_url, &[("url", url)]));
+    }
+    if let Some(model) = &update.model {
+        println!("{}", fill(i18n::t().line_model, &[("model", model)]));
+    }
+    println!("{}", fill(i18n::t().config_path_line, &[("path", path)]));
+}
+
+fn edit_api_key(env: &EnvMap, name: &str) -> Result<(), Error> {
+    let secret = match rpassword::prompt_password(i18n::t().prompt_api_key) {
+        Ok(secret) => secret,
+        Err(_) => {
+            eprintln!("cmdgen: {}", i18n::t().err_hidden_input);
+            return Ok(());
+        }
+    };
+    let file = match CredentialFile::from_env(env) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("cmdgen: {err}");
+            return Ok(());
+        }
+    };
+    match save_api_key(name, &secret, &KeyringStore, &file) {
+        Ok(saved) => print_saved_key(name, saved),
+        Err(err) => eprintln!("cmdgen: {err}"),
+    }
+    Ok(())
+}
+
+fn print_saved_key(name: &str, saved: SavedKey) {
+    match saved {
+        SavedKey::Keyring { removed_file_entry } => {
+            println!("{}", fill(i18n::t().saved_keyring, &[("account", name)]));
+            if removed_file_entry {
+                println!("{}", i18n::t().removed_file_key);
+            }
+        }
+        SavedKey::File { path } => {
+            println!(
+                "{}",
+                fill(
+                    i18n::t().saved_file,
+                    &[("path", &path.display().to_string())]
+                )
+            );
+            println!("{}", i18n::t().saved_file_mode);
+        }
+    }
+}
+
+fn delete_provider_key(env: &EnvMap, name: &str) -> Result<(), Error> {
+    if !confirm_delete(name)? {
+        println!("{}", i18n::t().cancelled);
+        return Ok(());
+    }
+    let file = match CredentialFile::from_env(env) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("cmdgen: {err}");
+            return Ok(());
+        }
+    };
+    match delete_api_key(name, &KeyringStore, &file) {
+        Ok(deleted) => match (deleted.keyring, deleted.file) {
+            (true, true) => {
+                println!("{}", fill(i18n::t().deleted_both, &[("account", name)]));
+            }
+            (true, false) => {
+                println!("{}", fill(i18n::t().deleted_keyring, &[("account", name)]));
+            }
+            (false, true) => println!(
+                "{}",
+                fill(
+                    i18n::t().deleted_file,
+                    &[("path", &file.path().display().to_string())]
+                )
+            ),
+            (false, false) => unreachable!("任一侧未删除时 delete_api_key 会返回错误"),
+        },
+        Err(err) => eprintln!("cmdgen: {err}"),
+    }
+    Ok(())
+}
+
+fn prompt_line(prompt: &str) -> Result<Option<String>, Error> {
+    eprint!("{prompt}");
+    io::stderr()
+        .flush()
+        .map_err(|err| Error::io("stderr", err))?;
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .map_err(|err| Error::io("stdin", err))?;
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
+}
+
+/// 在 stderr 上画出菜单。`None` 表示 Esc 或 Ctrl-C。
+fn select_index(title: &str, items: &[String], default: usize) -> Result<Option<usize>, Error> {
+    if items.is_empty() {
+        return Ok(None);
+    }
     enable_raw_mode().map_err(|err| Error::io("stdin", err))?;
     let mut guard = TerminalGuard {
         lines: 0,
         raw: true,
     };
     execute!(io::stderr(), Hide).map_err(|err| Error::io("stderr", err))?;
-    let mut index = LANGUAGE_CHOICES
-        .iter()
-        .position(|(lang, _)| *lang == current)
-        .unwrap_or(0);
+    let mut index = default.min(items.len() - 1);
     loop {
-        let lines = language_menu_lines(index);
+        let lines = menu_lines(title, items, index);
         guard.draw(&lines)?;
         match read_key()? {
-            KeyCode::Up => index = (index + LANGUAGE_CHOICES.len() - 1) % LANGUAGE_CHOICES.len(),
-            KeyCode::Down => index = (index + 1) % LANGUAGE_CHOICES.len(),
-            KeyCode::Enter => return Ok(Some(LANGUAGE_CHOICES[index].0)),
-            KeyCode::Esc => return Ok(None),
-            KeyCode::Char('c') => return Ok(None),
+            KeyCode::Up => index = (index + items.len() - 1) % items.len(),
+            KeyCode::Down => index = (index + 1) % items.len(),
+            KeyCode::Enter => return Ok(Some(index)),
+            KeyCode::Esc | KeyCode::Char('c') => return Ok(None),
             _ => {}
         }
     }
 }
 
-fn language_menu_lines(index: usize) -> Vec<String> {
-    let messages = i18n::t();
-    let mut lines = Vec::with_capacity(LANGUAGE_CHOICES.len() + 2);
-    lines.push(messages.lang_menu_title.to_string());
-    for (item, (_, label)) in LANGUAGE_CHOICES.iter().enumerate() {
+fn menu_lines(title: &str, items: &[String], index: usize) -> Vec<String> {
+    let mut lines = Vec::with_capacity(items.len() + 2);
+    lines.push(title.to_string());
+    for (item, label) in items.iter().enumerate() {
         let marker = if item == index { '>' } else { ' ' };
         lines.push(format!("{marker} {label}"));
     }
-    lines.push(messages.lang_menu_hint.to_string());
+    lines.push(i18n::t().lang_menu_hint.to_string());
     lines
 }
 
-/// 只处理按下和按住。`Ctrl-C` 在这里变成 `KeyCode::Char('c')`，调用方把它当作取消。
+/// 一次只从终端读一个按键，剩下的字节留在输入队列里。
+/// 退出 raw mode 之后，`read_line` 和隐藏输入才能读到已经键入的内容。
+/// `Ctrl-C` 变成 `KeyCode::Char('c')`，调用方把它当作取消。
 fn read_key() -> Result<KeyCode, Error> {
     loop {
-        let event = match event::read() {
-            Ok(event) => event,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-            Err(err) => return Err(Error::io("stdin", err)),
-        };
-        let Event::Key(key) = event else {
-            continue;
-        };
-        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-            continue;
+        match read_byte()? {
+            b'\r' | b'\n' => return Ok(KeyCode::Enter),
+            0x03 => return Ok(KeyCode::Char('c')),
+            0x1b => {
+                if let Some(code) = read_escape()? {
+                    return Ok(code);
+                }
+            }
+            _ => {}
         }
-        if key.code == KeyCode::Char('c') && !key.modifiers.contains(KeyModifiers::CONTROL) {
-            continue;
-        }
-        return Ok(key.code);
     }
+}
+
+thread_local! {
+    static PENDING_INPUT: RefCell<VecDeque<u8>> = const { RefCell::new(VecDeque::new()) };
+}
+
+fn read_byte() -> Result<u8, Error> {
+    if let Some(byte) = PENDING_INPUT.with(|pending| pending.borrow_mut().pop_front()) {
+        return Ok(byte);
+    }
+    let stdin = io::stdin();
+    let mut buf = [0u8; 1];
+    loop {
+        match rustix::io::read(&stdin, &mut buf) {
+            Ok(0) => {
+                return Err(Error::io(
+                    "stdin",
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "stdin closed"),
+                ));
+            }
+            Ok(_) => return Ok(buf[0]),
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(err) => return Err(Error::io("stdin", err.into())),
+        }
+    }
+}
+
+fn push_byte(byte: u8) {
+    PENDING_INPUT.with(|pending| pending.borrow_mut().push_front(byte));
+}
+
+fn input_ready(timeout: Duration) -> Result<bool, Error> {
+    if PENDING_INPUT.with(|pending| !pending.borrow().is_empty()) {
+        return Ok(true);
+    }
+    let stdin = io::stdin();
+    let mut fds = [rustix::event::PollFd::new(
+        &stdin,
+        rustix::event::PollFlags::IN,
+    )];
+    let spec = rustix::event::Timespec {
+        tv_sec: timeout.as_secs() as rustix::event::Secs,
+        tv_nsec: timeout.subsec_nanos() as rustix::event::Nsecs,
+    };
+    match rustix::event::poll(&mut fds, Some(&spec)) {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(fds[0].revents().contains(rustix::event::PollFlags::IN)),
+        Err(rustix::io::Errno::INTR) => Ok(false),
+        Err(err) => Err(Error::io("stdin", err.into())),
+    }
+}
+
+/// Esc 单独按下时返回取消。方向键是 `Esc [` 再加一个字母，已经在缓冲区里时立刻读完。
+fn read_escape() -> Result<Option<KeyCode>, Error> {
+    if !input_ready(Duration::from_millis(50))? {
+        return Ok(Some(KeyCode::Esc));
+    }
+    let second = read_byte()?;
+    if second != b'[' && second != b'O' {
+        push_byte(second);
+        return Ok(Some(KeyCode::Esc));
+    }
+    if !input_ready(Duration::from_millis(50))? {
+        push_byte(second);
+        return Ok(Some(KeyCode::Esc));
+    }
+    Ok(match read_byte()? {
+        b'A' => Some(KeyCode::Up),
+        b'B' => Some(KeyCode::Down),
+        b'C' => Some(KeyCode::Right),
+        b'D' => Some(KeyCode::Left),
+        _ => None,
+    })
 }
 
 struct TerminalGuard {
@@ -938,11 +1228,14 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn confirm_delete() -> Result<bool, Error> {
+fn confirm_delete(name: &str) -> Result<bool, Error> {
     if !io::stdin().is_terminal() {
         return Err(Error::Usage(i18n::t().err_confirm_delete.into()));
     }
-    eprint!("{}", i18n::t().prompt_confirm_delete);
+    eprint!(
+        "{}",
+        fill(i18n::t().prompt_confirm_delete, &[("name", name)])
+    );
     let _ = io::stderr().flush();
     let mut line = String::new();
     io::stdin()
@@ -965,9 +1258,7 @@ fn reject_inline_secret(args: &[OsString]) -> Result<(), Error> {
     while index < args.len() {
         let text = args[index].to_string_lossy();
         if text == "--" {
-            if positionals.last().map(String::as_str) == Some("set-key")
-                && positionals.iter().rev().nth(1).map(String::as_str) == Some("config")
-            {
+            if secret_command(&positionals) {
                 return Err(Error::Usage(i18n::t().secret_arg.into()));
             }
             break;
@@ -986,15 +1277,27 @@ fn reject_inline_secret(args: &[OsString]) -> Result<(), Error> {
             continue;
         }
         positionals.push(text.into_owned());
-        if positionals.len() >= 3
-            && positionals[positionals.len() - 3] == "config"
-            && positionals[positionals.len() - 2] == "set-key"
-        {
+        if rejects_trailing_secret(&positionals) {
             return Err(Error::Usage(i18n::t().secret_arg.into()));
         }
         index += 1;
     }
     Ok(())
+}
+
+/// `config set-key` 或 `config provider` 本身，后面还没跟参数。
+fn secret_command(positionals: &[String]) -> bool {
+    positionals.len() >= 2
+        && positionals[positionals.len() - 2] == "config"
+        && matches!(
+            positionals[positionals.len() - 1].as_str(),
+            "set-key" | "provider"
+        )
+}
+
+/// `config set-key <参数>` 和 `config provider <参数>` 都可能把密钥留在命令行里。
+fn rejects_trailing_secret(positionals: &[String]) -> bool {
+    positionals.len() >= 3 && secret_command(&positionals[..positionals.len() - 1])
 }
 
 #[cfg(test)]
@@ -1055,15 +1358,28 @@ mod tests {
 
     #[test]
     fn set_key_rejects_positional_secret_without_echoing_it() {
-        let err = reject_inline_secret(&[
-            "cmdgen".into(),
-            "config".into(),
-            "set-key".into(),
-            "SENTINEL_SECRET_VALUE".into(),
-        ])
-        .unwrap_err();
-        let text = err.to_string();
-        assert!(!text.contains("SENTINEL_SECRET_VALUE"));
-        assert!(text.contains("set-key"));
+        for command in ["set-key", "provider"] {
+            let err = reject_inline_secret(&[
+                "cmdgen".into(),
+                "config".into(),
+                command.into(),
+                "SENTINEL_SECRET_VALUE".into(),
+            ])
+            .unwrap_err();
+            let text = err.to_string();
+            assert!(!text.contains("SENTINEL_SECRET_VALUE"), "{text}");
+            assert!(text.contains("config provider"), "{text}");
+        }
+    }
+
+    #[test]
+    fn config_provider_is_a_subcommand() {
+        let cli = Cli::try_parse_from(["cmdgen", "config", "provider"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Config {
+                action: ConfigCommand::Provider
+            })
+        ));
     }
 }

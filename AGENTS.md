@@ -26,7 +26,7 @@ CI (`.github/workflows/ci.yml`) runs all four on ubuntu + macos. On Linux, tests
 ## Non-negotiable invariants
 
 - Never execute model output; there is no `--execute` and none may be added.
-- API keys never appear in `config.toml`, logs, error messages, or shell history. `set-key` takes no argument. Tests use `assert_no_secret` to enforce this — keep it that way.
+- API keys never appear in `config.toml`, logs, error messages, or shell history. `cmdgen config provider` takes no argument; a positional secret is rejected without being echoed. Tests use `assert_no_secret` to enforce this — keep it that way.
 - Exit contract: success → stdout contains only the command, stderr empty, exit 0; any failure → empty stdout, Chinese message on stderr, non-zero exit.
 - All user-facing errors/diagnostics are written in Chinese (to stderr). Debug stack traces only when `CMDGEN_DEBUG` is set.
 - `base_url` is an API prefix; the client appends `/chat/completions` exactly once. HTTPS required for non-localhost; never disable cert validation.

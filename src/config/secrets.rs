@@ -209,7 +209,7 @@ pub fn provider_env_var(provider: &str) -> &'static str {
     }
 }
 
-/// 本地凭据文件。只在系统凭据存储不可用时由 `set-key` 写入。
+/// 本地凭据文件。只在系统凭据存储不可用时由 `config provider` 写入。
 pub struct CredentialFile {
     path: PathBuf,
 }

@@ -84,11 +84,11 @@ Windows 不在发布范围内。从源码安装见 [DEV.md](DEV.md)。
 
 ```bash
 cmdgen config init
-cmdgen config set-key
+cmdgen config provider
 cmdgen "列出所有 docker 容器，包括已经停止的"
 ```
 
-`set-key` 会隐藏输入。系统凭据存储可用时，Key 保存到服务名 `cmdgen`、账号为当前 provider 名称的条目。macOS 使用登录钥匙串；Linux 使用 Secret Service。凭据存储不可用时，写入同目录的 `credentials.toml`（权限 `0600`）。关掉终端后再打开仍然有效。同一用户下的其他进程可以读取该文件。容器和 CI 请在每次启动时注入 `CMDGEN_API_KEY`，不要依赖这个文件。
+`config provider` 会打开菜单。选中 provider 后再选 API Key，输入不会回显。系统凭据存储可用时，Key 保存到服务名 `cmdgen`、账号为该 provider 名称的条目。macOS 使用登录钥匙串；Linux 使用 Secret Service。凭据存储不可用时，写入同目录的 `credentials.toml`（权限 `0600`）。关掉终端后再打开仍然有效。同一用户下的其他进程可以读取该文件。容器和 CI 请在每次启动时注入 `CMDGEN_API_KEY`，不要依赖这个文件。这个命令需要终端，也不接受把 Key 写在参数里。
 
 成功时标准输出只有命令，例如 `docker ps -a`。
 
@@ -125,7 +125,7 @@ cmdgen -- "-n 列出当前目录"
 
 `--` 后面的内容全部当作描述。因此 `cmdgen -- config` 会生成命令，而 `cmdgen config` 是配置子命令。
 
-单次覆盖参数：`--provider`、`--model`、`--base-url`、`--shell`、`--timeout`、`--verbose`。除了 `config set` 会保存 `--model` 和 `--base-url`，这些参数都只影响这一次。`--verbose` 只向 stderr 输出模型、接口和耗时，不输出 API Key，也不输出完整 prompt。
+单次覆盖参数：`--provider`、`--model`、`--base-url`、`--shell`、`--timeout`、`--verbose`。这些参数都只影响这一次。`--verbose` 只向 stderr 输出模型、接口和耗时，不输出 API Key，也不输出完整 prompt。
 
 ## 命令
 
@@ -136,19 +136,15 @@ cmdgen -- "-n 列出当前目录"
 | `cmdgen config show` | 显示有效配置，Key 脱敏 |
 | `cmdgen config providers` | 列出已保存的 provider，并标出当前项 |
 | `cmdgen config use <name>` | 把当前 provider 写入配置文件 |
-| `cmdgen config set` | 把 `--model` 或 `--base-url` 写入配置 |
-| `cmdgen config set-key` | 隐藏输入 API Key |
-| `cmdgen config delete-key` | 删除当前 provider 已保存的凭据 |
+| `cmdgen config provider` | 选择一个 provider，编辑它的 model、base_url 或 API Key |
 | `cmdgen shell install zsh\|bash` | 安装输入行集成 |
 | `cmdgen shell uninstall [zsh\|bash]` | 删除 cmdgen 管理的集成 |
 | `cmdgen doctor` | 检查配置、Key 来源、网络和集成 |
 | `cmdgen --version` / `--help` | 版本和帮助 |
 
-非交互环境删除凭据需要显式确认：`cmdgen config delete-key --yes`。
+`config provider` 编辑一个已保存的 provider，或尚未写入文件的预设 `deepseek` / `bailian`。上下键移动，Enter 确认，Esc 返回。改完一项会回到属性列表。它不修改 `active`，切换当前项用 `config use`。`config providers` 只列出名单。`CMDGEN_MODEL` 和 `CMDGEN_BASE_URL` 不会被写入。没有终端时命令会退出，并且不改文件。
 
-`config set` 可以只写 `--model` 或 `--base-url` 其中一个。`--provider` 省略时修改当前 `active`，不会切换当前项。`CMDGEN_MODEL` 和 `CMDGEN_BASE_URL` 不会被写入。
-
-给某一家保存 Key：`cmdgen config set-key --provider bailian`。单次切换不改文件：`cmdgen --provider bailian "列出大文件"`。`--provider` 等选项要写在 `config` 之后；写在前面时，`config` 会被当成描述。
+单次切换不改文件：`cmdgen --provider bailian "列出大文件"`。`--provider` 等选项要写在 `config` 之后；写在前面时，`config` 会被当成描述。
 
 ## 配置
 
@@ -227,13 +223,15 @@ include_cwd = false
 切到百炼：
 
 ```bash
-cmdgen config set-key --provider bailian
+cmdgen config provider
 cmdgen config use bailian
 ```
 
-`api_key_env` 只写环境变量名，不写密钥。百炼预设使用华北 2（北京）的共用域名，不包含业务空间 ID。若要改用业务空间专属域名，运行 `cmdgen config set --provider bailian --base-url <url>`。只想改这一次时，仍用 `--base-url`。
+在 `config provider` 里选择 bailian，再选择 API Key。`config use` 会写入 `active`。
 
-旧的 `[provider]` 表仍然可以读取；它和 `[providers]` 不能同时出现。其他 OpenAI 兼容服务可以写成 `[providers.<name>]`，或用 `cmdgen config set --provider <name> --base-url <url> --model <model>` 创建。
+`api_key_env` 只写环境变量名，不写密钥。百炼预设使用华北 2（北京）的共用域名，不包含业务空间 ID。若要改保存的地址，在 `cmdgen config provider` 里选择 base_url。只想改这一次时，仍用 `--base-url`。
+
+旧的 `[provider]` 表仍然可以读取；它和 `[providers]` 不能同时出现。只有这张旧表时，`config provider` 会拒绝编辑。其他 OpenAI 兼容服务写成带 `base_url` 和 `model` 的 `[providers.<name>]`，菜单里就会出现这个名称。
 
 `deepseek-flash` 不是永久有效的模型名。如果官方更换，请修改配置里的 `model`。DeepSeek 默认开启思考模式，cmdgen 在 provider 为 `deepseek` 时发送 `thinking.type=disabled`，以便直接返回命令。
 
@@ -320,7 +318,7 @@ Ctrl+G 调用 cmdgen 时不会带 `--lang`，快捷键路径读到的是配置�
 ## 安全
 
 - 不执行模型输出，没有 `--execute`。
-- 不把 Key 写入 `config.toml`、日志、错误信息或 Shell 历史。不要运行 `cmdgen config set-key <密钥>`。系统凭据存储不可用时，Key 只写入权限为 `0600` 的 `credentials.toml`。
+- 不把 Key 写入 `config.toml`、日志、错误信息或 Shell 历史。不要运行 `cmdgen config provider <密钥>`。系统凭据存储不可用时，Key 只写入权限为 `0600` 的 `credentials.toml`。
 - 默认不记录 prompt、响应或命令历史，也不上传环境变量和文件内容。
 - 只使用 HTTPS。远程地址不能关闭 TLS 证书校验。
 - 提示词会要求模型优先给出非破坏性命令。这不能消除风险，执行前必须自己检查。
@@ -328,7 +326,7 @@ Ctrl+G 调用 cmdgen 时不会带 `--lang`，快捷键路径读到的是配置�
 
 ## 故障排查
 
-- **未找到 API Key**：运行 `cmdgen config set-key`，或导出 `CMDGEN_API_KEY`。没有钥匙串或 Secret Service 时，`set-key` 会把 Key 写入 `credentials.toml`。只在当前终端临时使用时，导出环境变量即可，关闭终端后失效。
+- **未找到 API Key**：运行 `cmdgen config provider`，或导出 `CMDGEN_API_KEY`。没有钥匙串或 Secret Service 时，保存 Key 会写入 `credentials.toml`。只在当前终端临时使用时，导出环境变量即可，关闭终端后失效。
 - **base_url 无效**：去掉末尾的 `/chat/completions`，并确认远程地址是 `https://`。
 - **请求超时**：增大 `generation.timeout_secs` 或设置 `CMDGEN_TIMEOUT`。默认 20 秒，不会自动重试。
 - **返回解释文字**：cmdgen 会拒绝明显的说明文本。把需求写得更具体后重试。

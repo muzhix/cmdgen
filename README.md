@@ -84,11 +84,11 @@ Windows is not in the release set. See [DEV.md](DEV.md) to build from source.
 
 ```bash
 cmdgen config init
-cmdgen config set-key
+cmdgen config provider
 cmdgen "list every docker container, including stopped ones"
 ```
 
-`set-key` hides input. When the system credential store is available, the key is saved under the service name `cmdgen` with the current provider name as the account. macOS uses the login keychain. Linux uses Secret Service. When the credential store is unavailable, it writes `credentials.toml` in the same directory (mode `0600`). The key remains after you close the terminal. Other processes of the same user can read that file. Containers and CI should inject `CMDGEN_API_KEY` on each start and not depend on this file.
+`config provider` opens a menu. Choose a provider, then choose API key; the key is not echoed. When the system credential store is available, the key is saved under the service name `cmdgen` with that provider name as the account. macOS uses the login keychain. Linux uses Secret Service. When the credential store is unavailable, it writes `credentials.toml` in the same directory (mode `0600`). The key remains after you close the terminal. Other processes of the same user can read that file. Containers and CI should inject `CMDGEN_API_KEY` on each start and not depend on this file. The command needs a terminal and does not take the key as an argument.
 
 On success, standard output is only the command, for example `docker ps -a`.
 
@@ -125,7 +125,7 @@ cmdgen -- "-n list the current directory"
 
 Everything after `--` is the description. `cmdgen -- config` generates a command, while `cmdgen config` is the config subcommand.
 
-One-shot overrides: `--provider`, `--model`, `--base-url`, `--shell`, `--timeout`, `--verbose`. Except for `--model` and `--base-url` saved by `config set`, these affect only this run. `--verbose` prints the model, endpoint, and elapsed time to stderr. It does not print the API key or the full prompt.
+One-shot overrides: `--provider`, `--model`, `--base-url`, `--shell`, `--timeout`, `--verbose`. These affect only this run. `--verbose` prints the model, endpoint, and elapsed time to stderr. It does not print the API key or the full prompt.
 
 ## Commands
 
@@ -137,19 +137,15 @@ One-shot overrides: `--provider`, `--model`, `--base-url`, `--shell`, `--timeout
 | `cmdgen config providers` | List saved providers and mark the active one |
 | `cmdgen config use <name>` | Write the active provider to the config file |
 | `cmdgen config lang` | Choose the interface language and write it to the config file |
-| `cmdgen config set` | Write `--model` or `--base-url` into the config |
-| `cmdgen config set-key` | Read an API key without echoing it |
-| `cmdgen config delete-key` | Delete the current provider's saved credential |
+| `cmdgen config provider` | Choose a provider and edit its model, base URL, or API key |
 | `cmdgen shell install zsh\|bash` | Install input-line integration |
 | `cmdgen shell uninstall [zsh\|bash]` | Remove the integration cmdgen manages |
 | `cmdgen doctor` | Check config, key source, network, and integration |
 | `cmdgen --version` / `--help` | Version and help |
 
-Non-interactive deletion needs an explicit confirmation: `cmdgen config delete-key --yes`.
+`config provider` edits one saved provider, or the `deepseek` / `bailian` preset if it is not in the file yet. Arrow keys move, Enter confirms, and Esc goes back. After one field is saved you return to the field list. It does not change `active`; `config use` does that. `config providers` only lists names. `CMDGEN_MODEL` and `CMDGEN_BASE_URL` are not written. Without a terminal the command exits and leaves the files unchanged.
 
-`config set` can take just `--model` or just `--base-url`. When `--provider` is omitted, it updates the current `active` entry and does not switch the active provider. `CMDGEN_MODEL` and `CMDGEN_BASE_URL` are not written.
-
-Save a key for one provider: `cmdgen config set-key --provider bailian`. A one-shot switch does not edit the file: `cmdgen --provider bailian "list large files"`. Options such as `--provider` go after `config`; if they come first, `config` is treated as the description.
+A one-shot switch does not edit the file: `cmdgen --provider bailian "list large files"`. Options such as `--provider` go after `config`; if they come first, `config` is treated as the description.
 
 ## Configuration
 
@@ -228,13 +224,15 @@ include_cwd = false
 Switch to Bailian:
 
 ```bash
-cmdgen config set-key --provider bailian
+cmdgen config provider
 cmdgen config use bailian
 ```
 
-`api_key_env` is an environment variable name, not a secret. The Bailian preset uses the shared North China 2 (Beijing) endpoint and does not include a workspace id. To use a workspace-specific endpoint, run `cmdgen config set --provider bailian --base-url <url>`. For one run only, still use `--base-url`.
+In `config provider`, choose bailian and then API key. `config use` writes `active`.
 
-A legacy `[provider]` table can still be read; it cannot appear together with `[providers]`. Other OpenAI-compatible services can be written as `[providers.<name>]`, or created with `cmdgen config set --provider <name> --base-url <url> --model <model>`.
+`api_key_env` is an environment variable name, not a secret. The Bailian preset uses the shared North China 2 (Beijing) endpoint and does not include a workspace id. To change the saved address, choose base URL in `cmdgen config provider`. For one run only, still use `--base-url`.
+
+A legacy `[provider]` table can still be read; it cannot appear together with `[providers]`. `config provider` refuses to edit a file that only has that table. Other OpenAI-compatible services are written as `[providers.<name>]` with both `base_url` and `model`; the menu then lists that name.
 
 `deepseek-flash` is not a permanent model name. If the vendor changes it, update `model` in the config. DeepSeek enables thinking mode by default; when the provider is `deepseek`, cmdgen sends `thinking.type=disabled` so the response is a command.
 
@@ -323,7 +321,7 @@ Ctrl+G invokes cmdgen without `--lang`, so the shortcut path uses `language` fro
 ## Security
 
 - Model output is not executed. There is no `--execute`.
-- The key is not written to `config.toml`, logs, error messages, or shell history. Do not run `cmdgen config set-key <secret>`. When the system credential store is unavailable, the key is written only to `credentials.toml` with mode `0600`.
+- The key is not written to `config.toml`, logs, error messages, or shell history. Do not run `cmdgen config provider <secret>`. When the system credential store is unavailable, the key is written only to `credentials.toml` with mode `0600`.
 - Prompts, responses, and command history are not recorded by default. Environment variables and file contents are not uploaded.
 - Only HTTPS is used. Remote addresses cannot disable TLS certificate checks.
 - The prompt asks the model to prefer non-destructive commands. That does not remove the risk. Check the command yourself before running it.
@@ -331,7 +329,7 @@ Ctrl+G invokes cmdgen without `--lang`, so the shortcut path uses `language` fro
 
 ## Troubleshooting
 
-- **API key not found**: run `cmdgen config set-key`, or export `CMDGEN_API_KEY`. Without a keychain or Secret Service, `set-key` writes the key to `credentials.toml`. To use a key only in the current terminal, export the environment variable; it disappears when the terminal closes.
+- **API key not found**: run `cmdgen config provider`, or export `CMDGEN_API_KEY`. Without a keychain or Secret Service, saving a key writes it to `credentials.toml`. To use a key only in the current terminal, export the environment variable; it disappears when the terminal closes.
 - **Invalid base_url**: drop a trailing `/chat/completions`, and make sure a remote address is `https://`.
 - **Request timed out**: raise `generation.timeout_secs` or set `CMDGEN_TIMEOUT`. The default is 20 seconds, with no automatic retry.
 - **Explanation text came back**: cmdgen rejects obvious prose. Make the request more specific and try again.

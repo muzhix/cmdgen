@@ -287,7 +287,7 @@ fn missing_key_has_empty_stdout_and_setup_help() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("CMDGEN_API_KEY"));
-    assert!(stderr.contains("set-key"));
+    assert!(stderr.contains("config provider"));
 }
 
 #[test]
@@ -370,18 +370,20 @@ fn config_show_redacts_key_and_set_key_rejects_argv() {
     common::assert_no_secret(&stdout, SECRET);
     common::assert_no_secret(&stderr, SECRET);
 
-    let output = sandbox
-        .command()
-        .args(["config", "set-key", "SENTINEL_SECRET_VALUE"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    common::assert_no_secret(&combined, "SENTINEL_SECRET_VALUE");
+    for command in ["set-key", "provider"] {
+        let output = sandbox
+            .command()
+            .args(["config", command, "SENTINEL_SECRET_VALUE"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        common::assert_no_secret(&combined, "SENTINEL_SECRET_VALUE");
+    }
 }
 
 #[tokio::test]
@@ -468,7 +470,7 @@ fn config_use_switches_the_saved_provider() {
 }
 
 #[test]
-fn config_set_writes_the_provider_endpoint() {
+fn show_overrides_do_not_write_the_config() {
     let sandbox = common::Sandbox::new();
     sandbox
         .command()
@@ -477,14 +479,6 @@ fn config_set_writes_the_provider_endpoint() {
         .success();
     let path = sandbox.config_dir().join("config.toml");
     let original = fs::read_to_string(&path).unwrap();
-
-    sandbox
-        .command()
-        .args(["config", "set"])
-        .assert()
-        .failure()
-        .stderr(contains("--model"));
-    assert_eq!(fs::read_to_string(&path).unwrap(), original);
 
     sandbox
         .command()
@@ -500,42 +494,107 @@ fn config_set_writes_the_provider_endpoint() {
         .success()
         .stdout(contains("https://preview.example/v1"));
     assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
 
+#[test]
+fn config_provider_without_a_terminal_does_not_write() {
+    let sandbox = common::Sandbox::new();
     sandbox
         .command()
-        .env("CMDGEN_BASE_URL", "https://evil.example/v1")
-        .args([
-            "config",
-            "set",
-            "--provider",
-            "bailian",
-            "--base-url",
-            "https://llm.example.com/compatible-mode/v1",
-            "--model",
-            "qwen-plus",
-        ])
+        .args(["config", "init"])
         .assert()
-        .success()
-        .stdout(contains("updated provider: bailian"))
-        .stdout(contains("https://llm.example.com/compatible-mode/v1"))
-        .stdout(contains("qwen-plus"));
+        .success();
+    let path = sandbox.config_dir().join("config.toml");
+    let original = fs::read_to_string(&path).unwrap();
 
+    let output = sandbox
+        .command()
+        .args(["config", "provider"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("interactive terminal"), "{stderr}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn config_provider_rejects_a_legacy_provider_table() {
+    let sandbox = common::Sandbox::new();
+    let path = sandbox.config_dir().join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "[provider]\nname = \"example\"\nbase_url = \"https://example.com/v1\"\nmodel = \"custom\"\n";
+    fs::write(&path, original).unwrap();
+
+    let output = sandbox
+        .command()
+        .args(["config", "provider"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("[providers.<name>]"), "{stderr}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn config_provider_arrow_menu_updates_the_model() {
+    let sandbox = common::Sandbox::new();
+    sandbox
+        .command()
+        .args(["config", "init"])
+        .assert()
+        .success();
+    let path = sandbox.config_dir().join("config.toml");
+    // Enter selects the highlighted provider (deepseek), Enter selects model,
+    // then the new model, then Esc back and Esc out.
+    let output = tty_menu(
+        &sandbox,
+        "0d0d637573746f6d2d6d6f64656c0a1b1b",
+        &["config", "provider"],
+    );
+    let visible = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "status={:?}\nvisible={visible}",
+        output.status
+    );
+    assert!(visible.contains("updated provider: deepseek"), "{visible}");
+    assert!(visible.contains("model: custom-model"), "{visible}");
+    common::assert_no_secret(&visible, "sk-menu-not-shown");
     let updated = fs::read_to_string(&path).unwrap();
+    assert!(updated.contains("model = \"custom-model\""), "{updated}");
     assert!(updated.contains("active = \"deepseek\"") || updated.contains("active = 'deepseek'"));
     assert!(updated.contains("https://api.deepseek.com"));
-    assert!(updated.contains("https://llm.example.com/compatible-mode/v1"));
-    assert!(updated.contains("qwen-plus"));
-    assert!(!updated.contains("evil.example"));
-    assert!(updated.contains("DASHSCOPE_API_KEY"));
+    assert!(updated.contains("qwen3.8-flash"));
+    assert!(!updated.contains("model = \"deepseek-flash\""));
+}
 
-    sandbox
-        .command()
-        .args(["config", "show", "--provider", "bailian"])
-        .assert()
-        .success()
-        .stdout(contains("provider.name: bailian"))
-        .stdout(contains("https://llm.example.com/compatible-mode/v1"))
-        .stdout(contains("provider.model: qwen-plus"));
+fn tty_menu(sandbox: &common::Sandbox, keys_hex: &str, args: &[&str]) -> std::process::Output {
+    let mut cmd = assert_cmd::Command::new("python3");
+    cmd.arg("-c")
+        .arg(include_str!("tty_menu.py"))
+        .arg(env!("CARGO_BIN_EXE_cmdgen"))
+        .args(args)
+        .env("HOME", &sandbox.home)
+        .env("XDG_CONFIG_HOME", &sandbox.config_home)
+        .env("SHELL", "/bin/zsh")
+        .env("CMDGEN_TTY_KEYS", keys_hex)
+        .env("CMDGEN_TTY_MARKER", "Provider")
+        .env("CMDGEN_API_KEY", "sk-menu-not-shown")
+        .env_remove("DEEPSEEK_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("DASHSCOPE_API_KEY")
+        .env_remove("CMDGEN_BASE_URL")
+        .env_remove("CMDGEN_MODEL")
+        .env_remove("CMDGEN_PROVIDER")
+        .env_remove("CMDGEN_SHELL")
+        .env_remove("CMDGEN_TIMEOUT")
+        .env_remove("CMDGEN_LANG")
+        .env_remove("CMDGEN_DEBUG")
+        .timeout(std::time::Duration::from_secs(15));
+    cmd.output().expect("python3 pty")
 }
 
 #[tokio::test]
